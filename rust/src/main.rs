@@ -15,8 +15,8 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.0";
-const USER_AGENT: &str = "ReleaseOrganizer/1.6";
+const APP_VERSION: &str = "1.6.1";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.1";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -91,6 +91,8 @@ struct FileProg {
     total: u64,
     speed: f64,
     error: String,
+    /// 下载过程中的临时提示（比如「连接被限速，正在换线路重连」）
+    note: String,
 }
 
 enum Msg {
@@ -249,6 +251,40 @@ fn agent(timeout_secs: u64) -> ureq::Agent {
         .timeout(Duration::from_secs(timeout_secs))
         .redirects(10)
         .build()
+}
+
+/// 下载专用的 agent。
+///
+/// 这里**不能**用 `.timeout(整体时限)`：那是「从发请求到读完 body」的总时长，
+/// 一个 100MB 的文件在 300KB/s 下要 5 分多钟，45 秒的整体超时会把它强杀，
+/// 表现就是「进度卡住不动 → 超时重连 → 又开始飞」，大文件必踩。
+/// 改为只限制「单次读空闲」：只要对端还在吐数据就一直读，真卡死才断开重来。
+fn dl_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .user_agent(USER_AGENT)
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(15))
+        .timeout_write(Duration::from_secs(20))
+        .redirects(10)
+        .build()
+}
+
+/// 分片卡的判定：连续这么久没有明显进展就换条连接重来
+const STALL_SECS: u64 = 10;
+/// 这段时间内至少要下这么多，低于它按「卡住」处理
+const STALL_MIN_BYTES: u64 = 48 * 1024;
+
+/// 下载卡顿时给用户看的解释（悬停/详情用，讲清楚原因）
+const NOTE_RECONNECT: &str = "这条连接被限速了，正在自动换一条线路重连，一般 5~15 秒恢复。\
+GitHub 对大文件会限制单条连接的下载速度，多分片下载时某一片被卡住就会出现「进度停一会儿又飞快」，属正常现象，不用操作。";
+/// 同一句话的短版，放在底部状态栏一行里
+const NOTE_SHORT: &str = "连接卡顿，正在自动重连（约 5~15 秒），请稍候";
+
+fn route_url(routes: &[(String, String)], i: usize, base: &str) -> String {
+    match routes.get(i % routes.len().max(1)) {
+        Some((_, prefix)) => format!("{}{}", prefix, base),
+        None => base.to_string(),
+    }
 }
 
 fn normalize_repo(text: &str) -> String {
@@ -523,8 +559,7 @@ fn fmt_speed(bps: f64) -> String {
     format!("{}/s", fmt_size(bps as u64))
 }
 
-fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut FileProg)) {
-    if let Ok(mut v) = prog.lock() {
+fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut FileProg)) {    if let Ok(mut v) = prog.lock() {
         if let Some(p) = v.get_mut(idx) {
             f(p);
         }
@@ -532,6 +567,52 @@ fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut Fi
 }
 
 // ---------------------------------------------------------------- 断点续传
+
+/// 截图自查用的假进度（RO_FAKE=1）：只影响显示，不碰磁盘
+fn fake_prog(kind: &str) -> Arc<Mutex<Vec<FileProg>>> {
+    let stalled = kind == "stall";
+    let sp = |v: f64| if stalled { 0.0 } else { v };
+    let nt = || if stalled { NOTE_RECONNECT.to_string() } else { String::new() };
+    let mk = |asset: &str, folder: &str, recv: u64, total: u64, speed: f64, st: &str| FileProg {
+        asset: asset.to_string(),
+        folder: folder.to_string(),
+        target: asset.to_string(),
+        status: st.to_string(),
+        received: recv,
+        total,
+        speed,
+        error: String::new(),
+        note: nt(),
+    };
+    let mb = 1024 * 1024;
+    // 顺序按演示列表来：第 1 个已完成，后两个正在下
+    Arc::new(Mutex::new(vec![
+        mk(
+            "GroupPolicyObjectFiles-0.103.3062.0.zip",
+            "其他",
+            9 * mb / 10,
+            9 * mb / 10,
+            0.0,
+            "完成",
+        ),
+        mk(
+            "symbols-arm64.zip",
+            "Windows",
+            130 * mb,
+            380 * mb,
+            sp(1_180_000.0),
+            "下载中",
+        ),
+        mk(
+            "symbols-x64.zip",
+            "Windows",
+            96 * mb,
+            386 * mb,
+            sp(640_000.0),
+            "下载中",
+        ),
+    ]))
+}
 
 /// 一份未完成任务的身份信息，存成 <目标文件>.part.meta
 #[derive(Clone, Default)]
@@ -660,7 +741,9 @@ fn scan_pending(outdir: &str) -> Vec<(Meta, u64)> {
 /// 返回 "RANGE_SKIP"（文件太小，不分片）/"RANGE_UNSUPPORTED"（该线路不支持 Range）时，
 /// 调用方应回退到单连接下载。
 fn download_segmented(
-    full_url: &str,
+    base_url: &str,
+    routes: &[(String, String)],
+    route0: usize,
     dir: &PathBuf,
     target: &str,
     size: u64,
@@ -684,8 +767,16 @@ fn download_segmented(
     let counter = Arc::new(AtomicU64::new(0));
     let unsupported = Arc::new(AtomicBool::new(false));
     let broken = Arc::new(AtomicBool::new(false));
+    // 每段下到哪了 + 「请重连」信号。用来揪出被限速拖后腿的段：
+    // 一条连接被运营商/GitHub 单连接限速时不会报错，就是慢慢爬，
+    // 光看「有没有数据」发现不了，得跟同伴比才知道它是在爬。
+    let seg_done: Arc<Vec<AtomicU64>> = Arc::new((0..segs).map(|_| AtomicU64::new(0)).collect());
+    let kick: Arc<Vec<AtomicBool>> = Arc::new((0..segs).map(|_| AtomicBool::new(false)).collect());
+    let kick_cnt: Arc<Vec<AtomicU64>> = Arc::new((0..segs).map(|_| AtomicU64::new(0)).collect());
     let per = size / segs;
     let mut handles = Vec::new();
+    let routes = Arc::new(routes.to_vec());
+    let base = Arc::new(base_url.to_string());
 
     for i in 0..segs {
         let start = i * per;
@@ -698,19 +789,31 @@ fn download_segmented(
         let expect = end - start + 1;
         let have = std::fs::metadata(&seg_path).map(|m| m.len()).unwrap_or(0);
         counter.fetch_add(have.min(expect), Ordering::SeqCst);
+        seg_done[i as usize].store(have.min(expect), Ordering::SeqCst);
 
-        let url = full_url.to_string();
         let counter2 = counter.clone();
         let cancel2 = cancel.clone();
         let unsupported2 = unsupported.clone();
         let broken2 = broken.clone();
+        let routes2 = routes.clone();
+        let base2 = base.clone();
+        let sd2 = seg_done.clone();
+        let kick2 = kick.clone();
+        let si = i as usize;
 
         handles.push(std::thread::spawn(move || {
-            for _attempt in 0..3 {
+            // 一条连接被限速/挂死时，换下一条线路往往能立刻恢复，
+            // 所以每次重试都往后挪一条线路，而不是死磕同一条。
+            let mut route = route0;
+            let mut fails: u32 = 0;
+            loop {
                 if cancel2.load(Ordering::SeqCst) {
                     return;
                 }
+                kick2[si].store(false, Ordering::SeqCst);
                 let have = std::fs::metadata(&seg_path).map(|m| m.len()).unwrap_or(0);
+                // 以磁盘上的真实进度为准，避免被踢时少算/多算
+                sd2[si].store(have.min(expect), Ordering::SeqCst);
                 if have >= expect {
                     // 断点比预期还长（上次合并出过错）→ 截到该分片的正常长度
                     if have > expect {
@@ -720,8 +823,13 @@ fn download_segmented(
                     }
                     return;
                 }
+                if fails >= 8 {
+                    broken2.store(true, Ordering::SeqCst);
+                    return;
+                }
+                let url = route_url(&routes2, route, &base2);
                 let from = start + have;
-                let ag = agent(45);
+                let ag = dl_agent();
                 let resp = ag
                     .get(&url)
                     .set("Range", &format!("bytes={}-{}", from, end))
@@ -731,14 +839,22 @@ fn download_segmented(
                     Ok(r) => r,
                     Err(ureq::Error::Status(416, _)) => return,
                     Err(_) => {
-                        std::thread::sleep(Duration::from_millis(700));
+                        fails += 1;
+                        route += 1;
+                        std::thread::sleep(Duration::from_millis(300 + fails as u64 * 200));
                         continue;
                     }
                 };
-                // 服务端不支持分段（返回 200 整包）→ 交给单连接下载
+                // 服务端不支持分段（返回 200 整包）
                 if resp.status() != 206 {
-                    unsupported2.store(true, Ordering::SeqCst);
-                    return;
+                    // 主线路就不支持 → 整个文件回退单连接；换线后的线路不支持 → 只换下一条
+                    if route == route0 {
+                        unsupported2.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    fails += 1;
+                    route += 1;
+                    continue;
                 }
                 let mut f = match std::fs::OpenOptions::new()
                     .create(true)
@@ -754,6 +870,10 @@ fn download_segmented(
                 let mut reader = resp.into_reader();
                 let mut buf = vec![0u8; 256 * 1024];
                 let mut clean = false;
+                // 本次连接读到的字节数，用来判断这条连接是不是「在爬」
+                let mut conn: u64 = 0;
+                let mut mark: u64 = 0;
+                let mut mark_t = Instant::now();
                 loop {
                     if cancel2.load(Ordering::SeqCst) {
                         let _ = f.flush();
@@ -768,7 +888,21 @@ fn download_segmented(
                             if f.write_all(&buf[..n]).is_err() {
                                 break;
                             }
+                            conn += n as u64;
                             counter2.fetch_add(n as u64, Ordering::SeqCst);
+                            sd2[si].fetch_add(n as u64, Ordering::SeqCst);
+                            // 比同伴慢太多，被判为拖后腿 → 断开换连接
+                            if kick2[si].load(Ordering::SeqCst) {
+                                break;
+                            }
+                            // 爬行检测：STALL_SECS 内没下够 STALL_MIN_BYTES 就换连接
+                            if mark_t.elapsed().as_secs() >= STALL_SECS {
+                                if conn - mark < STALL_MIN_BYTES {
+                                    break;
+                                }
+                                mark = conn;
+                                mark_t = Instant::now();
+                            }
                         }
                         Err(_) => break,
                     }
@@ -778,16 +912,31 @@ fn download_segmented(
                 if clean {
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(700));
-            }
-            let have = std::fs::metadata(&seg_path).map(|m| m.len()).unwrap_or(0);
-            if have < expect {
-                broken2.store(true, Ordering::SeqCst);
+                fails += 1;
+                route += 1;
+                std::thread::sleep(Duration::from_millis(300 + fails as u64 * 200));
             }
         }));
     }
 
-    // 等待期间持续刷新进度
+    // 每段应下的长度，用于判断「还剩多少没下」
+    let seg_len: Vec<u64> = (0..segs)
+        .map(|i| {
+            let start = i * per;
+            let end = if i + 1 == segs {
+                size - 1
+            } else {
+                (i + 1) * per - 1
+            };
+            end - start + 1
+        })
+        .collect();
+    let mut last_seg: Vec<u64> = (0..segs as usize)
+        .map(|i| seg_done[i].load(Ordering::SeqCst))
+        .collect();
+    let mut last_check = Instant::now();
+
+    // 等待期间持续刷新进度，同时盯着各段速度
     loop {
         if handles.iter().all(|h| h.is_finished()) || cancel.load(Ordering::SeqCst) {
             break;
@@ -798,6 +947,50 @@ fn download_segmented(
             p.received = c;
             p.total = size;
         });
+
+        if last_check.elapsed() >= Duration::from_millis(1500) {
+            let dt = last_check.elapsed().as_secs_f64();
+            last_check = Instant::now();
+            let now: Vec<u64> = (0..segs as usize)
+                .map(|i| seg_done[i].load(Ordering::SeqCst))
+                .collect();
+            let mut sum = 0.0f64;
+            let mut n = 0usize;
+            let mut rates: Vec<Option<f64>> = vec![None; segs as usize];
+            for i in 0..segs as usize {
+                if now[i] < seg_len[i] {
+                    let r = now[i].saturating_sub(last_seg[i]) as f64 / dt;
+                    rates[i] = Some(r);
+                    sum += r;
+                    n += 1;
+                }
+            }
+            // 比同伴慢一大截的段：连接被限速了但没报错，主动断开换一条
+            for i in 0..segs as usize {
+                let Some(r) = rates[i] else { continue };
+                let remain = seg_len[i] - now[i];
+                let slow_vs_peers = n >= 2 && r * 3.0 < sum / n as f64;
+                // 只剩最后一段时没有同伴可比，速度低得离谱也换一次试试
+                let last_one = n == 1 && r < 300_000.0;
+                if (slow_vs_peers || last_one)
+                    && remain > 256 * 1024
+                    && kick_cnt[i].load(Ordering::SeqCst) < 3
+                {
+                    kick_cnt[i].fetch_add(1, Ordering::SeqCst);
+                    kick[i].store(true, Ordering::SeqCst);
+                }
+            }
+            let slowed = (0..segs as usize)
+                .any(|i| kick_cnt[i].load(Ordering::SeqCst) > 0 && now[i] < seg_len[i]);
+            set_prog(prog, idx, |p| {
+                p.note = if slowed {
+                    NOTE_RECONNECT.into()
+                } else {
+                    String::new()
+                };
+            });
+            last_seg = now;
+        }
     }
     for h in handles {
         let _ = h.join();
@@ -833,9 +1026,17 @@ fn download_segmented(
         return Err(format!("分片不完整（{}/{}），断点已保留", merged_len, size));
     }
 
-    // 按顺序合并分片
+    // 按顺序合并分片。合并是纯磁盘活，几秒内完成，但界面要说明白在干什么，
+    // 否则用户看到进度停在 100% 会以为卡死了。
+    set_prog(prog, idx, |p| {
+        p.status = "合并中".into();
+        p.received = size;
+        p.total = size;
+        p.speed = 0.0;
+    });
     let part_path = dir.join(format!("{}.part", target));
-    let mut out = std::fs::File::create(&part_path).map_err(|e| format!("无法写入文件：{}", e))?;
+    let f = std::fs::File::create(&part_path).map_err(|e| format!("无法写入文件：{}", e))?;
+    let mut out = std::io::BufWriter::with_capacity(8 * 1024 * 1024, f);
     for i in 0..segs {
         let seg_path = dir.join(format!("{}.part{}", target, i));
         let mut f = std::fs::File::open(&seg_path).map_err(|e| format!("读取分片失败：{}", e))?;
@@ -843,9 +1044,10 @@ fn download_segmented(
         drop(f);
         let _ = std::fs::remove_file(&seg_path);
     }
-    let _ = out.set_len(size);
     let _ = out.flush();
-    drop(out);
+    let f = out.into_inner().map_err(|e| format!("合并分片失败：{}", e))?;
+    let _ = f.set_len(size);
+    drop(f);
 
     set_prog(prog, idx, |p| {
         p.received = size;
@@ -908,6 +1110,7 @@ fn download_one(
                 p.total = row.size;
                 p.speed = 0.0;
                 p.error.clear();
+                p.note.clear();
             });
             return;
         }
@@ -926,17 +1129,27 @@ fn download_one(
 
     let mut last_error = String::new();
 
-    for (_rname, prefix) in routes {
+    for (ri, (_rname, prefix)) in routes.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
             set_prog(prog, idx, |p| p.status = "已取消".into());
             return;
         }
         let full = format!("{}{}", prefix, row.url);
-        let ag = agent(45);
+        let ag = dl_agent();
 
         // 大文件先走多连接分片；不支持或失败时自动退回单连接
         if row.size >= 2 * 1024 * 1024 {
-            match download_segmented(&full, &dir, &row.target, row.size, prog, idx, cancel) {
+            match download_segmented(
+                &row.url,
+                routes,
+                ri,
+                &dir,
+                &row.target,
+                row.size,
+                prog,
+                idx,
+                cancel,
+            ) {
                 Ok(_) => {
                     if dest.exists() {
                         let _ = std::fs::remove_file(&dest);
@@ -949,6 +1162,7 @@ fn download_one(
                         p.total = row.size;
                         p.speed = 0.0;
                         p.error.clear();
+                        p.note.clear();
                     });
                     return;
                 }
@@ -965,7 +1179,7 @@ fn download_one(
             }
         }
 
-        for attempt in 1..=2 {
+        for attempt in 1..=3 {
             let existing = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             let mut req = ag.get(&full);
             if existing > 0 {
@@ -1053,6 +1267,7 @@ fn download_one(
                         p.received = received;
                         p.total = if total > 0 { total } else { received };
                         p.speed = 0.0;
+                        p.note.clear();
                     });
                     return;
                 }
@@ -1073,8 +1288,8 @@ fn download_one(
                     last_error = format!("{}", e);
                 }
             }
-            if attempt == 1 {
-                std::thread::sleep(Duration::from_millis(400));
+            if attempt < 3 {
+                std::thread::sleep(Duration::from_millis(300 + attempt as u64 * 500));
             }
         }
     }
@@ -1092,6 +1307,7 @@ fn download_one(
             last_error.clone()
         };
         p.speed = 0.0;
+        p.note.clear();
     });
 }
 
@@ -1121,11 +1337,15 @@ fn spawn_download(
                 total: r.size,
                 speed: 0.0,
                 error: String::new(),
+                note: String::new(),
             });
         }
     }
 
-    let threads = 3.min(total.max(1));
+    // 大文件每个都要开 8 条连接，几个一起下就是二十几条连接抢一条宽带，
+    // 每条分到的带宽太小，反而更容易被限速拖死。所以有大文件时降并发。
+    let big = rows.iter().any(|r| r.size >= 16 * 1024 * 1024);
+    let threads = if big { 2 } else { 3 }.min(total.max(1));
     for _ in 0..threads {
         let rows = rows.clone();
         let routes = routes.clone();
@@ -1158,6 +1378,10 @@ fn spawn_download(
                         p.speed = (p.received.saturating_sub(prev)) as f64 / dt;
                         all_finished = false;
                     } else if p.status == "排队中" {
+                        p.speed = 0.0;
+                        all_finished = false;
+                    } else if p.status == "合并中" {
+                        // 合并阶段也是没干完，别在这儿提前判完成
                         p.speed = 0.0;
                         all_finished = false;
                     } else {
@@ -1276,6 +1500,9 @@ impl App {
         } else {
             "填入仓库地址后点「扫描 Release」。".into()
         };
+        // 截图自查用：RO_FAKE=1 摆一个「正在下载」的进度快照，
+        // 免得每次都要真跑一遍下载才能看到底部总速度、状态列这些。
+        let fake = std::env::var("RO_FAKE").ok();
         Self {
             repos: if demo {
                 "sharkdp/bat\nmicrosoft/PowerToys".to_string()
@@ -1291,10 +1518,12 @@ impl App {
             scanning: false,
             routes: Vec::new(),
             probing: false,
-            prog: None,
+            prog: fake.as_ref().map(|k| fake_prog(k)),
             cancel: Arc::new(AtomicBool::new(false)),
-            job_done: Arc::new(AtomicBool::new(true)),
-            job_started: None,
+            job_done: Arc::new(AtomicBool::new(fake.is_none())),
+            job_started: fake
+                .as_ref()
+                .map(|_| Instant::now() - Duration::from_secs(32)),
             job_reported: true,
             status,
             show_routes: false,
@@ -1520,6 +1749,13 @@ impl App {
             }
             None => (0, 0, 0.0),
         }
+    }
+
+    /// 所有任务已下载字节之和
+    fn received_all(&self) -> u64 {
+        self.progress_snapshot()
+            .map(|s| s.iter().map(|p| p.received).sum())
+            .unwrap_or(0)
     }
 }
 
@@ -2817,10 +3053,43 @@ impl eframe::App for App {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let (done, total, frac) = self.overall();
-                        bar(ui, frac, 208.0, 18.0);
+                        let spd: f64 = self
+                            .progress_snapshot()
+                            .map(|s| s.iter().map(|p| p.speed).sum())
+                            .unwrap_or(0.0);
+                        let live = downloading && spd >= 1024.0;
+                        let recv_all = self.received_all();
+
+                        // 进度条 + 紧跟其下的总速度，一眼能看到整体在不在跑
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(232.0, 78.0),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                let txt = if live {
+                                    format!("总速度 {}", fmt_speed(spd))
+                                } else if downloading {
+                                    "总速度 0 B/s · 正在换线路".to_string()
+                                } else if total > 0 {
+                                    format!("已下 {}", fmt_size(recv_all))
+                                } else {
+                                    String::new()
+                                };
+                                // 没有小字时把进度条往下压一点，视觉上居中，不留一条空带
+                                ui.add_space(if txt.is_empty() { 25.0 } else { 16.0 });
+                                bar(ui, frac, 232.0, 18.0);
+                                if !txt.is_empty() {
+                                    ui.add_space(3.0);
+                                    ui.label(
+                                        egui::RichText::new(txt)
+                                            .font(pr(12.5))
+                                            .color(if live { TEXT2 } else { CORAL }),
+                                    );
+                                }
+                            },
+                        );
                         ui.add_space(14.0);
 
-                        let info_w = (ui.available_width() - 210.0).max(120.0);
+                        let info_w = (ui.available_width() - 246.0).max(120.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(info_w, 78.0),
                             egui::Layout::top_down(egui::Align::LEFT),
@@ -2833,11 +3102,18 @@ impl eframe::App for App {
                                 };
                                 ui.label(egui::RichText::new(head).font(px(16.0)).color(INK));
                                 ui.add_space(2.0);
+                                // 卡顿时把「在重连、大概多久、不用管」直接写在状态行，
+                                // 用户瞟一眼就知道不是卡死
+                                let stalled = downloading && !live;
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(&self.status)
-                                            .font(pr(13.0))
-                                            .color(TEXT2),
+                                        egui::RichText::new(if stalled {
+                                            NOTE_SHORT
+                                        } else {
+                                            self.status.as_str()
+                                        })
+                                        .font(pr(13.0))
+                                        .color(if stalled { CORAL } else { TEXT2 }),
                                     )
                                     .truncate(),
                                 );
@@ -3412,12 +3688,29 @@ impl eframe::App for App {
                                                             .font(px(13.5))
                                                             .color(INK),
                                                         );
-                                                        ui.label(
-                                                            egui::RichText::new(fmt_speed(p.speed))
-                                                                .font(pr(12.5))
-                                                                .color(TEXT2),
+                                                        // 速度掉到几乎为 0，说明这条连接被限速或挂了，
+                                                        // 程序正在换线路重连，直接把状态说清楚，别让人以为死机
+                                                        let slow = !p.note.is_empty() || p.speed < 1024.0;
+                                                        let lb = ui.label(
+                                                            egui::RichText::new(if slow {
+                                                                "换线路中…".to_string()
+                                                            } else {
+                                                                fmt_speed(p.speed)
+                                                            })
+                                                            .font(pr(12.5))
+                                                            .color(if slow { CORAL } else { TEXT2 }),
                                                         );
+                                                        if slow {
+                                                            lb.on_hover_text(NOTE_RECONNECT);
+                                                        }
                                                     }
+                                                    // 分片下完了正在拼成一个文件，几秒钟，说明白点免得以为卡住
+                                                    "合并中" => pill(
+                                                        ui,
+                                                        "合并中…",
+                                                        egui::Color32::from_rgb(122, 76, 12),
+                                                        SUN,
+                                                    ),
                                                     "完成" => pill(
                                                         ui,
                                                         "已完成",

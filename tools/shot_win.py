@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""按窗口标题截取指定窗口（Win32 GDI），用于界面自查。
+"""按窗口标题（或进程 PID）截取指定窗口（Win32 GDI），用于界面自查。
 
-用法：python shot_win.py out.bmp [--size 1150x800] [窗口标题]
+用法：
+    python shot_win.py out.bmp [--size 1150x800] [窗口标题]
+    python shot_win.py out.bmp --pid 12345 [--size 1150x800]
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -17,6 +19,7 @@ kernel32 = ctypes.windll.kernel32
 OUT = "win.bmp"
 TITLE = "GitHub Release 下载整理工具"
 size = None
+pid = None
 
 argv = sys.argv[1:]
 i = 0
@@ -27,6 +30,10 @@ while i < len(argv):
         size = argv[i + 1]
         i += 2
         continue
+    if a == "--pid":
+        pid = int(argv[i + 1])
+        i += 2
+        continue
     if first:
         OUT = a
         first = False
@@ -34,9 +41,32 @@ while i < len(argv):
         TITLE = a
     i += 1
 
-hwnd = user32.FindWindowW(None, TITLE)
+
+def by_pid(target):
+    """同名的窗口可能有多个（用户自己开着一个，自测又开一个），按 PID 精确找。"""
+    found = []
+    CB = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+
+    def cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        p = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+        if p.value == target and user32.GetWindowTextLengthW(hwnd) > 0:
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(CB(cb), 0)
+    return found[0] if found else 0
+
+
+if pid:
+    hwnd = by_pid(pid)
+else:
+    hwnd = user32.FindWindowW(None, TITLE)
+
 if not hwnd:
-    print("window not found:", TITLE)
+    print("window not found:", pid or TITLE)
     sys.exit(1)
 
 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
