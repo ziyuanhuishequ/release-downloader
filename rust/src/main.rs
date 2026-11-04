@@ -15,8 +15,8 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.1";
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.1";
+const APP_VERSION: &str = "1.6.2";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.2";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -274,10 +274,24 @@ const STALL_SECS: u64 = 10;
 /// 这段时间内至少要下这么多，低于它按「卡住」处理
 const STALL_MIN_BYTES: u64 = 48 * 1024;
 
-/// 下载卡顿时给用户看的解释（悬停/详情用，讲清楚原因）
-const NOTE_RECONNECT: &str = "这条连接被限速了，正在自动换一条线路重连，一般 5~15 秒恢复。\
-GitHub 对大文件会限制单条连接的下载速度，多分片下载时某一片被卡住就会出现「进度停一会儿又飞快」，属正常现象，不用操作。";
-/// 同一句话的短版，放在底部状态栏一行里
+/// FileProg.note 里只放标记，文案由界面按标记去取
+const NOTE_SWITCH: &str = "switch";
+const NOTE_BOOST: &str = "boost";
+
+/// 换线路时给用户看的完整解释（悬停用）
+const NOTE_RECONNECT: &str = "这条连接被 GitHub 限速了，先断开、换一条线路重连，一般 5~15 秒恢复。\n\
+换线路是正常现象，已下好的部分不会重下，换到快的线路后速度会明显提升，请放心。\n\
+等得着急的话：点「停止」再点「开始下载」，程序会从断点接着下，相当于立刻强制重连一次。";
+/// 自动「暂停→继续」提速的说明（悬停用）
+const NOTE_BOOST_TIP: &str = "软件发现网速变慢了，正在自动断开并重新连接，效果和手动「暂停一下再继续」一样，\
+通常 1~3 秒就恢复。\n\
+已下载的部分不会重下，重新连上后速度往往能翻好几倍，这是 GitHub 单连接限速导致的，属正常现象，请放心。";
+/// 底部状态栏一行：正在换线路
+const NOTE_SHORT_SWITCH: &str =
+    "换线路中（正常，会更快）· 想快点可「停止」再「开始」";
+/// 底部状态栏一行：正在自动重启提速
+const NOTE_SHORT_BOOST: &str = "正在自动重启连接提速（1~3 秒），已下好的不会重下，请放心";
+/// 底部状态栏一行：兜底（刚开始连/没网速但还没触发换线）
 const NOTE_SHORT: &str = "连接卡顿，正在自动重连（约 5~15 秒），请稍候";
 
 fn route_url(routes: &[(String, String)], i: usize, base: &str) -> String {
@@ -570,9 +584,18 @@ fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut Fi
 
 /// 截图自查用的假进度（RO_FAKE=1）：只影响显示，不碰磁盘
 fn fake_prog(kind: &str) -> Arc<Mutex<Vec<FileProg>>> {
-    let stalled = kind == "stall";
+    let stalled = kind == "stall" || kind == "boost";
+    let boost = kind == "boost";
     let sp = |v: f64| if stalled { 0.0 } else { v };
-    let nt = || if stalled { NOTE_RECONNECT.to_string() } else { String::new() };
+    let nt = || {
+        if boost {
+            NOTE_BOOST.to_string()
+        } else if stalled {
+            NOTE_SWITCH.to_string()
+        } else {
+            String::new()
+        }
+    };
     let mk = |asset: &str, folder: &str, recv: u64, total: u64, speed: f64, st: &str| FileProg {
         asset: asset.to_string(),
         folder: folder.to_string(),
@@ -773,6 +796,10 @@ fn download_segmented(
     let seg_done: Arc<Vec<AtomicU64>> = Arc::new((0..segs).map(|_| AtomicU64::new(0)).collect());
     let kick: Arc<Vec<AtomicBool>> = Arc::new((0..segs).map(|_| AtomicBool::new(false)).collect());
     let kick_cnt: Arc<Vec<AtomicU64>> = Arc::new((0..segs).map(|_| AtomicU64::new(0)).collect());
+    // 「整体重连」代际计数：主线程 +1，所有分片线程看到变了就断开重连。
+    // 这就是用户手动「暂停→继续」的自动版——涨号后全部连接重新握手，
+    // 往往能落在一个更快的 CDN 节点上，速度立刻回升。
+    let boost = Arc::new(AtomicU64::new(0));
     let per = size / segs;
     let mut handles = Vec::new();
     let routes = Arc::new(routes.to_vec());
@@ -799,6 +826,7 @@ fn download_segmented(
         let base2 = base.clone();
         let sd2 = seg_done.clone();
         let kick2 = kick.clone();
+        let boost2 = boost.clone();
         let si = i as usize;
 
         handles.push(std::thread::spawn(move || {
@@ -811,6 +839,8 @@ fn download_segmented(
                     return;
                 }
                 kick2[si].store(false, Ordering::SeqCst);
+                // 建连前记下代际，这样「刚建连就被要求重启」也能识别出来
+                let gen_seen = boost2.load(Ordering::SeqCst);
                 let have = std::fs::metadata(&seg_path).map(|m| m.len()).unwrap_or(0);
                 // 以磁盘上的真实进度为准，避免被踢时少算/多算
                 sd2[si].store(have.min(expect), Ordering::SeqCst);
@@ -870,6 +900,7 @@ fn download_segmented(
                 let mut reader = resp.into_reader();
                 let mut buf = vec![0u8; 256 * 1024];
                 let mut clean = false;
+                let mut restarted = false;
                 // 本次连接读到的字节数，用来判断这条连接是不是「在爬」
                 let mut conn: u64 = 0;
                 let mut mark: u64 = 0;
@@ -895,6 +926,11 @@ fn download_segmented(
                             if kick2[si].load(Ordering::SeqCst) {
                                 break;
                             }
+                            // 整体重连信号：和用户手动「暂停→继续」一个效果
+                            if boost2.load(Ordering::SeqCst) != gen_seen {
+                                restarted = true;
+                                break;
+                            }
                             // 爬行检测：STALL_SECS 内没下够 STALL_MIN_BYTES 就换连接
                             if mark_t.elapsed().as_secs() >= STALL_SECS {
                                 if conn - mark < STALL_MIN_BYTES {
@@ -911,6 +947,12 @@ fn download_segmented(
                 drop(f);
                 if clean {
                     return;
+                }
+                // 主动重启不算失败：不清零次数、不长退避，歇一下立刻从断点重连
+                if restarted {
+                    route += 1;
+                    std::thread::sleep(Duration::from_millis(120));
+                    continue;
                 }
                 fails += 1;
                 route += 1;
@@ -935,6 +977,22 @@ fn download_segmented(
         .map(|i| seg_done[i].load(Ordering::SeqCst))
         .collect();
     let mut last_check = Instant::now();
+
+    // ---- 自动「暂停→继续」的状态
+    // 实测：手动点停止再点开始，速度能翻好几倍。原因是一样的——重新握手后
+    // 落到了更快的 CDN 节点。这里把它做成自动的：整体速度掉下来了就全体重连。
+    let started_at = Instant::now();
+    let mut best_rate: f64 = 0.0; // 本次下载见过的最好总速度
+    let mut slow_streak: u32 = 0; // 连续几次采样判定为「变慢」
+    let mut boost_cnt: u32 = 0; // 自动重启用掉几次
+    let mut last_boost = Instant::now() - Duration::from_secs(120); // 首次不冷却
+    let mut boost_at: Option<Instant> = None;
+    let mut kick_at: Option<Instant> = None;
+    // 自动重启：冷却 25 秒、全程最多 5 次，避免来回折腾
+    const BOOST_COOLDOWN: u64 = 25;
+    const BOOST_MAX: u32 = 5;
+    // 剩余量少于这个就别重启了，快下完时重启反而更慢
+    const BOOST_MIN_REMAIN: u64 = 8 * 1024 * 1024;
 
     // 等待期间持续刷新进度，同时盯着各段速度
     loop {
@@ -966,6 +1024,7 @@ fn download_segmented(
                 }
             }
             // 比同伴慢一大截的段：连接被限速了但没报错，主动断开换一条
+            let mut kicked_now = false;
             for i in 0..segs as usize {
                 let Some(r) = rates[i] else { continue };
                 let remain = seg_len[i] - now[i];
@@ -978,17 +1037,57 @@ fn download_segmented(
                 {
                     kick_cnt[i].fetch_add(1, Ordering::SeqCst);
                     kick[i].store(true, Ordering::SeqCst);
+                    kicked_now = true;
                 }
             }
-            let slowed = (0..segs as usize)
-                .any(|i| kick_cnt[i].load(Ordering::SeqCst) > 0 && now[i] < seg_len[i]);
-            set_prog(prog, idx, |p| {
-                p.note = if slowed {
-                    NOTE_RECONNECT.into()
-                } else {
-                    String::new()
-                };
-            });
+            if kicked_now {
+                kick_at = Some(Instant::now());
+            }
+
+            // ---- 整体速度掉下来了 → 全体重连（自动版「暂停→继续」）
+            let remain_total: u64 = (0..segs as usize)
+                .map(|i| seg_len[i].saturating_sub(now[i]))
+                .sum();
+            if sum > best_rate {
+                best_rate = sum;
+            }
+            // 掉到历史最好的 45% 以下：多半是这条线路整体被限速了
+            let dropped = n >= 2 && best_rate > 800_000.0 && sum < best_rate * 0.45;
+            // 开局就一直很慢（历史最好也没起来）：试探性重启一次
+            let early_slow = boost_cnt == 0
+                && n >= 2
+                && started_at.elapsed() >= Duration::from_secs(20)
+                && sum < 600_000.0;
+            if (dropped || early_slow) && remain_total > BOOST_MIN_REMAIN {
+                slow_streak += 1;
+            } else {
+                slow_streak = 0;
+            }
+            // 连续两轮（约 3 秒）都慢才动手，避免速度抖动时乱重启
+            let ready = slow_streak >= 2
+                && boost_cnt < BOOST_MAX
+                && last_boost.elapsed() >= Duration::from_secs(BOOST_COOLDOWN);
+            if ready {
+                boost_cnt += 1;
+                last_boost = Instant::now();
+                boost_at = Some(Instant::now());
+                slow_streak = 0;
+                // 重启后速度要从 0 重新爬，别把爬坡误判成「又变慢了」
+                best_rate = 0.0;
+                boost.fetch_add(1, Ordering::SeqCst);
+            }
+
+            // 状态列提示：重启后 8 秒内说「正在重启提速」，其余时间说「换线路」
+            let mut note = String::new();
+            if boost_at.map(|t| t.elapsed().as_secs() < 8).unwrap_or(false) {
+                note = NOTE_BOOST.to_string();
+            } else if kicked_now
+                || kick_at.map(|t| t.elapsed().as_secs() < 6).unwrap_or(false)
+                || (n >= 2 && best_rate > 0.0 && sum < best_rate * 0.6)
+            {
+                note = NOTE_SWITCH.to_string();
+            }
+            set_prog(prog, idx, |p| p.note = note);
             last_seg = now;
         }
     }
@@ -3053,12 +3152,23 @@ impl eframe::App for App {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let (done, total, frac) = self.overall();
-                        let spd: f64 = self
-                            .progress_snapshot()
+                        let snap = self.progress_snapshot();
+                        let spd: f64 = snap
+                            .as_ref()
                             .map(|s| s.iter().map(|p| p.speed).sum())
                             .unwrap_or(0.0);
                         let live = downloading && spd >= 1024.0;
                         let recv_all = self.received_all();
+                        // 当前处于哪种「自救」状态：自动重启提速 / 换线路
+                        let note_kind = snap
+                            .as_ref()
+                            .and_then(|s| {
+                                s.iter()
+                                    .find(|p| !p.note.is_empty())
+                                    .map(|p| p.note.clone())
+                            })
+                            .unwrap_or_default();
+                        let boosting = note_kind == NOTE_BOOST;
 
                         // 进度条 + 紧跟其下的总速度，一眼能看到整体在不在跑
                         ui.allocate_ui_with_layout(
@@ -3068,7 +3178,11 @@ impl eframe::App for App {
                                 let txt = if live {
                                     format!("总速度 {}", fmt_speed(spd))
                                 } else if downloading {
-                                    "总速度 0 B/s · 正在换线路".to_string()
+                                    if boosting {
+                                        "总速度 0 B/s · 正在重启连接".to_string()
+                                    } else {
+                                        "总速度 0 B/s · 正在换线路".to_string()
+                                    }
                                 } else if total > 0 {
                                     format!("已下 {}", fmt_size(recv_all))
                                 } else {
@@ -3102,18 +3216,23 @@ impl eframe::App for App {
                                 };
                                 ui.label(egui::RichText::new(head).font(px(16.0)).color(INK));
                                 ui.add_space(2.0);
-                                // 卡顿时把「在重连、大概多久、不用管」直接写在状态行，
+                                // 卡顿时把「在干什么、大概多久、不用管」直接写在状态行，
                                 // 用户瞟一眼就知道不是卡死
                                 let stalled = downloading && !live;
+                                let line: String = if stalled {
+                                    match note_kind.as_str() {
+                                        NOTE_BOOST => NOTE_SHORT_BOOST.to_string(),
+                                        NOTE_SWITCH => NOTE_SHORT_SWITCH.to_string(),
+                                        _ => NOTE_SHORT.to_string(),
+                                    }
+                                } else {
+                                    self.status.clone()
+                                };
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(if stalled {
-                                            NOTE_SHORT
-                                        } else {
-                                            self.status.as_str()
-                                        })
-                                        .font(pr(13.0))
-                                        .color(if stalled { CORAL } else { TEXT2 }),
+                                        egui::RichText::new(line)
+                                            .font(pr(13.0))
+                                            .color(if stalled { CORAL } else { TEXT2 }),
                                     )
                                     .truncate(),
                                 );
@@ -3689,19 +3808,36 @@ impl eframe::App for App {
                                                             .color(INK),
                                                         );
                                                         // 速度掉到几乎为 0，说明这条连接被限速或挂了，
-                                                        // 程序正在换线路重连，直接把状态说清楚，别让人以为死机
-                                                        let slow = !p.note.is_empty() || p.speed < 1024.0;
+                                                        // 程序正在自动换线路/自动重启连接，直接把状态说清楚，
+                                                        // 别让人以为死机
+                                                        let boosting = p.note == NOTE_BOOST;
+                                                        let switching = p.note == NOTE_SWITCH;
+                                                        let slow =
+                                                            boosting || switching || p.speed < 1024.0;
+                                                        let sep = if slow { "  " } else { "" };
+                                                        let txt = if boosting {
+                                                            "重启提速中…".to_string()
+                                                        } else if switching {
+                                                            "换线路中…".to_string()
+                                                        } else if slow {
+                                                            "连接中…".to_string()
+                                                        } else {
+                                                            fmt_speed(p.speed)
+                                                        };
                                                         let lb = ui.label(
-                                                            egui::RichText::new(if slow {
-                                                                "换线路中…".to_string()
-                                                            } else {
-                                                                fmt_speed(p.speed)
-                                                            })
+                                                            egui::RichText::new(format!(
+                                                                "{}{}",
+                                                                sep, txt
+                                                            ))
                                                             .font(pr(12.5))
                                                             .color(if slow { CORAL } else { TEXT2 }),
                                                         );
                                                         if slow {
-                                                            lb.on_hover_text(NOTE_RECONNECT);
+                                                            lb.on_hover_text(if boosting {
+                                                                NOTE_BOOST_TIP
+                                                            } else {
+                                                                NOTE_RECONNECT
+                                                            });
                                                         }
                                                     }
                                                     // 分片下完了正在拼成一个文件，几秒钟，说明白点免得以为卡住

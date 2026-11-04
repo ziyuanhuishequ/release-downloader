@@ -137,7 +137,7 @@ def _vs_block(key, value, value_len, wtype, children=b""):
     return struct.pack("<HHH", 6 + len(body), value_len, wtype) + body
 
 
-def version_blob(ver="1.6.1.0"):
+def version_blob(ver="1.6.2.0"):
     """生成 RT_VERSION 资源：让 exe 属性里能看到名称与版本号"""
     desc = "GitHub Release 下载整理工具"
     nums = [int(x) for x in ver.split(".")]

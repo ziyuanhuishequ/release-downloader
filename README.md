@@ -16,6 +16,8 @@
 - **多连接分片下载**：大文件自动切成 4 / 6 / 8 段并发，失败自动回退单连接
 - **卡顿自愈**：10 秒没进展的连接自动断开重连，比同伴慢一大截的分片主动踢掉换线路，
   界面会写明「正在换线路，约 5~15 秒恢复」，不用人工干预
+- **自动「暂停→继续」提速**：整体速度掉到本次峰值的 45% 以下时，所有连接一起断开重连，
+  效果等同于手动点「停止」再「开始」，通常 1~3 秒恢复且速度翻几倍（全程最多 5 次，间隔 ≥ 25 秒）
 - **断点续传**：中断后分片保留，下次启动在列表上方提示「有 N 个文件没下完」，一键接着下
 - **实时总速度**：底部进度条下方显示所有任务加起来的速度，掉到 0 会变红提示
 - **镜像线路测速**：内置 8 条线路并行测速，自动挑最快的那条
@@ -25,21 +27,25 @@
 
 ## 界面
 
-| 下载中（进度条下是总速度） | 卡顿自动重连时的提示 |
+| 下载中（进度条下是总速度） | 卡顿换线路时的提示 |
 | --- | --- |
 | ![下载中](screenshots/downloading.png) | ![卡顿提示](screenshots/reconnecting.png) |
 
-| 断点续传提示 | 下载完成提醒 |
+| 自动重启连接提速 | 断点续传提示 |
 | --- | --- |
-| ![断点续传](screenshots/resume.png) | ![完成提醒](screenshots/done-dialog.png) |
+| ![重启提速](screenshots/boosting.png) | ![断点续传](screenshots/resume.png) |
 
-| 字段悬停说明 | 空状态 |
+| 下载完成提醒 | 字段悬停说明 |
 | --- | --- |
-| ![悬停说明](screenshots/tooltip.png) | ![空状态](screenshots/empty.png) |
+| ![完成提醒](screenshots/done-dialog.png) | ![悬停说明](screenshots/tooltip.png) |
+
+| 空状态 | |
+| --- | --- |
+| ![空状态](screenshots/empty.png) | |
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.1.exe`），双击运行，无需安装
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.2.exe`），双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -83,7 +89,8 @@ cargo build --release
 │  └─ assets/              图标资源与生成脚本
 ├─ tools/
 │  ├─ rangesrv.py          本地 Range 测试服务器（带限速），验证断点续传
-│  └─ slowsrv.py           只让第一个分片请求变慢，验证「慢分片自动换连接」
+│  ├─ slowsrv.py           只让第一个分片请求变慢，验证「慢分片自动换连接」
+│  └─ boost_srv.py         前 N 个请求慢、之后的请求全速，验证「自动重启提速」
 ├─ screenshots/            界面截图
 └─ 使用说明.txt             面向使用者的完整说明
 ```
@@ -99,18 +106,26 @@ cargo build --release
 2. **半开连接**：链路断了但对端不报错，客户端只能等超时。
 3. 磁盘写入被占用（杀毒软件扫描正在下载的安装包时最明显）。
 
-代码里对应的三道防线：
+代码里对应的四道防线：
 
 | 机制 | 位置 | 作用 |
 | --- | --- | --- |
 | 下载 agent 不设整体超时，只设 `timeout_read(15s)` | `dl_agent()` | 旧版用 `timeout(45s)` 是「整个请求」的时限，100MB 在慢速下 45 秒必被强杀重连，这是卡顿的主因 |
 | 单连接 10 秒内涨幅 < 48KB → 断开重连 | `download_segmented` 读循环 | 处理完全停滞 |
 | 每 1.5 秒采样各分片速度，慢于同伴 1/3 就断开换线路 | `download_segmented` 等待循环 | 处理「慢但没死」的拖后腿分片；只剩最后一段时按绝对速度判断 |
+| 整体速度连续两轮低于峰值 45% → 全体重连（自动「暂停→继续」） | `download_segmented` 等待循环 + `boost` 代际计数 | 处理「整条线路都变慢」，重新握手落到更快的 CDN 节点 |
+
+全局重连的实现：主线程把 `boost: AtomicU64` 加一，各分片线程在读循环里比对建连时记下的代际，
+一变就主动断开，然后从磁盘上的 `.partN` 长度续传。主动重启**不累计失败次数**，冷却 25 秒、
+全程最多 5 次、剩余不足 8MB 时不再触发，避免来回折腾。
 
 所有中断都从断点续传，不重下已经拿到的字节（`.partN` 是 append 写）。
-状态会写进 `FileProg.note`，界面在状态列显示「换线路中…」、底部显示「连接卡顿，正在自动重连」。
+状态写进 `FileProg.note`（只放 `switch` / `boost` 标记，文案由界面映射），
+界面在状态列显示「换线路中…」或「重启提速中…」，底部状态行给出「正常现象、要等多久、请放心」的说明。
 
 实测（20MB 文件、本地模拟一条连接被限速到 18KB/s）：改造前 144 秒，改造后 4 秒，md5 一致。
+自动提速实测（`tools/boost_srv.py`，前 8 个请求 40KB/s、之后的请求全速）：23.7 秒完成，
+服务端日志可见 25.9 秒时全体重连、新连接直接跑满，md5 一致；不重连需 62 秒。
 
 ## 断点续传的文件格式
 
@@ -149,7 +164,7 @@ release-organizer.exe --pick                                 # 目录选择对�
 release-organizer.exe --selftest                             # 内置自测
 ```
 
-环境变量：`RO_DEMO=1` 演示模式、`RO_OUTDIR=<路径>` 强制保存目录、`RO_DIALOG=1` 启动即弹出完成提醒、`RO_TIP=latest|pre|token` 强制显示某个悬停说明、`RO_FAKE=1|stall` 伪造进行中的下载进度（用于截界面图，`stall` 是「正在重连」的样子）。
+环境变量：`RO_DEMO=1` 演示模式、`RO_OUTDIR=<路径>` 强制保存目录、`RO_DIALOG=1` 启动即弹出完成提醒、`RO_TIP=latest|pre|token` 强制显示某个悬停说明、`RO_FAKE=1|stall|boost` 伪造进行中的下载进度（用于截界面图，`stall` 是「正在换线路」、`boost` 是「正在重启提速」的样子）。
 
 验证断点续传：
 
@@ -164,6 +179,14 @@ release-organizer.exe --dl http://127.0.0.1:18777/big.bin <大小> <输出目录
 ```bash
 python tools/slowsrv.py <某个大文件> 18781 2000000 18000
 release-organizer.exe --dl http://127.0.0.1:18781/big.bin <大小> <输出目录> big.bin
+```
+
+验证「自动暂停→继续提速」（前 8 个请求每个 40KB/s，客户端发现总速上不去会全体重连，
+之后的请求按 2.4MB/s 全速发；服务端日志应出现第二批请求）：
+
+```bash
+python tools/boost_srv.py <某个 20MB 文件> 18783 40000 2400000 8
+release-organizer.exe --dl http://127.0.0.1:18783/big.bin 20971520 <输出目录> big.bin
 ```
 
 ## 说明

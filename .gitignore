@@ -9,3 +9,10 @@
 # 系统文件
 Thumbs.db
 .DS_Store
+
+# 本地临时测试（下载测试服、解压校验）
+/_btest/
+/_zchk/
+/_trash/
+# 交付用的源码压缩包
+/*-源码-v*.zip
