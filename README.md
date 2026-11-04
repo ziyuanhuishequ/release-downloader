@@ -32,7 +32,7 @@
 
 ## 使用
 
-1. 下载或自行编译 `release-organizer.exe`，双击运行，无需安装
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.0.exe`），双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
