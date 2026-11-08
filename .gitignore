@@ -16,3 +16,4 @@ Thumbs.db
 /_trash/
 # 交付用的源码压缩包
 /*-源码-v*.zip
+/_selftest_out/

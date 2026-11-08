@@ -20,7 +20,10 @@
   效果等同于手动点「停止」再「开始」，通常 1~3 秒恢复且速度翻几倍（全程最多 5 次，间隔 ≥ 25 秒）
 - **断点续传**：中断后分片保留，下次启动在列表上方提示「有 N 个文件没下完」，一键接着下
 - **实时总速度**：底部进度条下方显示所有任务加起来的速度，掉到 0 会变红提示
-- **镜像线路测速**：内置 8 条线路并行测速，自动挑最快的那条
+- **20 条加速线路 + 自定义**：内置 20 条镜像并行测速，自动挑最快的；exe 同目录放 `routes.txt`
+  即可追加自己的线路，镜像换域名不用等更新
+- **504 快速换线**：网关超时/5xx 立刻换下一条线路并拉黑，不再在死线路上反复重试 3 次；
+  整轮网络类失败会等 2 秒自动重试一次
 - **Token 支持**：未登录 GitHub API 每小时限 60 次，填 Token 可提升额度
 - **完成提醒**：全部下完后弹窗询问是否直接打开保存文件夹
 - **像素风界面**：全部控件手绘，无第三方 UI 库皮肤
@@ -45,7 +48,7 @@
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.2.exe`），双击运行，无需安装
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.3.exe`），双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -90,7 +93,8 @@ cargo build --release
 ├─ tools/
 │  ├─ rangesrv.py          本地 Range 测试服务器（带限速），验证断点续传
 │  ├─ slowsrv.py           只让第一个分片请求变慢，验证「慢分片自动换连接」
-│  └─ boost_srv.py         前 N 个请求慢、之后的请求全速，验证「自动重启提速」
+│  ├─ boost_srv.py         前 N 个请求慢、之后的请求全速，验证「自动重启提速」
+│  └─ err_srv.py           全 504 / 全 404 / 前 N 个 504，验证换线与自动重试
 ├─ screenshots/            界面截图
 └─ 使用说明.txt             面向使用者的完整说明
 ```
@@ -106,7 +110,7 @@ cargo build --release
 2. **半开连接**：链路断了但对端不报错，客户端只能等超时。
 3. 磁盘写入被占用（杀毒软件扫描正在下载的安装包时最明显）。
 
-代码里对应的四道防线：
+代码里对应的五道防线：
 
 | 机制 | 位置 | 作用 |
 | --- | --- | --- |
@@ -114,6 +118,7 @@ cargo build --release
 | 单连接 10 秒内涨幅 < 48KB → 断开重连 | `download_segmented` 读循环 | 处理完全停滞 |
 | 每 1.5 秒采样各分片速度，慢于同伴 1/3 就断开换线路 | `download_segmented` 等待循环 | 处理「慢但没死」的拖后腿分片；只剩最后一段时按绝对速度判断 |
 | 整体速度连续两轮低于峰值 45% → 全体重连（自动「暂停→继续」） | `download_segmented` 等待循环 + `boost` 代际计数 | 处理「整条线路都变慢」，重新握手落到更快的 CDN 节点 |
+| 504/502/503 → 立刻换线路并拉黑，连撞 3 条就停 | `route_dead()` + `dead_routes` | 处理「镜像站整站挂了」。以前不分青红皂白重试 3 次，8 条线路就是 24 次 504，用户要白等好几分钟 |
 
 全局重连的实现：主线程把 `boost: AtomicU64` 加一，各分片线程在读循环里比对建连时记下的代际，
 一变就主动断开，然后从磁盘上的 `.partN` 长度续传。主动重启**不累计失败次数**，冷却 25 秒、
@@ -126,6 +131,17 @@ cargo build --release
 实测（20MB 文件、本地模拟一条连接被限速到 18KB/s）：改造前 144 秒，改造后 4 秒，md5 一致。
 自动提速实测（`tools/boost_srv.py`，前 8 个请求 40KB/s、之后的请求全速）：23.7 秒完成，
 服务端日志可见 25.9 秒时全体重连、新连接直接跑满，md5 一致；不重连需 62 秒。
+
+504 处理实测（`tools/err_srv.py`）：
+
+| 场景 | 请求数 | 结果 |
+| --- | --- | --- |
+| 单线路全 504（1MB） | 2（旧版 3） | 0.8 秒给出「所有线路都超时（HTTP 504）」 |
+| 3 条线路全 504 | 6（旧版 9） | 2.4 秒 |
+| 20 条线路全 504 | 12（旧版 60） | 6.4 秒，含一次自动重试 |
+| 20MB 大文件全 504 | 26（旧版 88） | 2 秒放弃分片 + 单连接兜底 |
+| 前 3 条 504、第 4 条正常（20MB） | 26 | 6.4 秒下完，md5 一致 |
+| 一次抖动（第 1 个请求 504） | 2 | 自动重试后成功，md5 一致 |
 
 ## 断点续传的文件格式
 
@@ -154,17 +170,39 @@ url=https://github.com/.../PowerToysUserSetup-0.85.1-x64.exe
 
 设计上有一条约定：取消或分片失败时**不删除分片**；只有服务器不支持 Range 时才清理，因为要整体回退单连接。
 
+## 线路表：内置 20 条，也可以自己补
+
+`ROUTE_LIST`（`main.rs` 顶部）内置 20 条，含直连与各家 GitHub 加速镜像。免费镜像经常整站挂掉或开始限流，
+所以宁可多放备胎：测速只有真拉到数据的才排到前面，挂掉的自动沉底，不影响正常下载。
+
+想再加线路不用改代码——`routes.txt` 放到 exe 同目录，一行一条：
+
+```
+# 注释行以 # 开头
+我的线路|https://gh.example.com/
+https://another.example.com/
+```
+
+`名称|前缀` 用竖线分隔，只写前缀也行；末尾斜杠会自动补。测速时与内置线路一起测，能不能用由测速决定。
+`GitHub下载整理工具.exe --routes` 可以打印当前生效的线路表（便于确认 routes.txt 有没有被读到）。
+
+状态码处理见 `route_dead()`：`403/404/408/410/425/429/500/502/503/504/520~524` 视为「这条线路自己不可用」。
+4xx 立即换线；5xx 在同一条线路上补试 1 次（隔 0.7 秒）再换；换掉的线路写进本轮 `dead_routes` 黑名单，
+多文件下载时后面的文件直接跳过它。连续 3 条线路都是线路级失败就停止尝试——线路表 20 条，
+不设这个闸门的话，全网挂掉时用户要盯着转好几分钟。
+
 ## 调试用的隐藏参数
 
 ```bash
 release-organizer.exe --dl <url> <size> <保存目录> [文件名]   # 不启动界面，只下载单个 URL
 release-organizer.exe --pending <保存目录>                   # 列出未完成的下载
+release-organizer.exe --routes                               # 打印生效的线路表（含 routes.txt）
 release-organizer.exe --fontcheck                            # 字体加载自检
 release-organizer.exe --pick                                 # 目录选择对话框自检
 release-organizer.exe --selftest                             # 内置自测
 ```
 
-环境变量：`RO_DEMO=1` 演示模式、`RO_OUTDIR=<路径>` 强制保存目录、`RO_DIALOG=1` 启动即弹出完成提醒、`RO_TIP=latest|pre|token` 强制显示某个悬停说明、`RO_FAKE=1|stall|boost` 伪造进行中的下载进度（用于截界面图，`stall` 是「正在换线路」、`boost` 是「正在重启提速」的样子）。
+环境变量：`RO_DEMO=1` 演示模式、`RO_OUTDIR=<路径>` 强制保存目录、`RO_DIALOG=1` 启动即弹出完成提醒、`RO_TIP=latest|pre|token` 强制显示某个悬停说明、`RO_FAKE=1|stall|boost` 伪造进行中的下载进度（用于截界面图，`stall` 是「正在换线路」、`boost` 是「正在重启提速」的样子）、`RO_DL_ROUTES="https://a/,https://b/"` 给 `--dl` 指定多条线路（测换线/黑名单用）。
 
 验证断点续传：
 
@@ -187,6 +225,17 @@ release-organizer.exe --dl http://127.0.0.1:18781/big.bin <大小> <输出目录
 ```bash
 python tools/boost_srv.py <某个 20MB 文件> 18783 40000 2400000 8
 release-organizer.exe --dl http://127.0.0.1:18783/big.bin 20971520 <输出目录> big.bin
+```
+
+验证「504 快速换线 / 自动重试」（服务端全返回 504，应在几秒内失败并给出中文原因；
+`flaky:1` 是第一个请求 504、之后正常，用于验证自动重试）：
+
+```bash
+python tools/err_srv.py <某个文件> 18785 all
+release-organizer.exe --dl http://127.0.0.1:18785/big.bin <大小> <输出目录> big.bin
+
+python tools/err_srv.py <某个文件> 18786 flaky:1
+release-organizer.exe --dl http://127.0.0.1:18786/big.bin <大小> <输出目录> big.bin
 ```
 
 ## 说明

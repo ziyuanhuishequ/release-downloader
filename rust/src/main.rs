@@ -15,8 +15,8 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.2";
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.2";
+const APP_VERSION: &str = "1.6.3";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.3";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -42,17 +42,85 @@ const TIP_TOKEN: (&str, &str) = (
 );
 
 const ERR_RED: egui::Color32 = egui::Color32::from_rgb(198, 48, 32);
-/// 加速线路候选：前缀为空表示直连
+/// 加速线路候选：前缀为空表示直连。
+///
+/// 镜像站经常整站挂掉或开始限流（返回 504/502/403），所以这里放了一批备胎：
+/// 测速阶段只有真正拉到数据的才会排到前面，挂掉的自动沉底，不影响正常下载。
+/// 想再加线路不用改代码——exe 同目录放一个 routes.txt 就行（见 load_custom_routes）。
 const ROUTE_LIST: &[(&str, &str)] = &[
     ("直连", ""),
     ("gh-proxy.com", "https://gh-proxy.com/"),
     ("ghproxy.net", "https://ghproxy.net/"),
-    ("gh-proxy.org", "https://gh-proxy.org/"),
-    ("cors.isteed", "https://cors.isteed.cc/"),
     ("ghfast.top", "https://ghfast.top/"),
+    ("gh-proxy.org", "https://gh-proxy.org/"),
     ("moeyy", "https://github.moeyy.xyz/"),
+    ("ghproxy.cc", "https://ghproxy.cc/"),
+    ("gh.llkk.cc", "https://gh.llkk.cc/"),
     ("gitmirror", "https://hub.gitmirror.com/"),
+    ("cors.isteed", "https://cors.isteed.cc/"),
+    ("gh-proxy.net", "https://gh-proxy.net/"),
+    ("ghproxy.cfd", "https://ghproxy.cfd/"),
+    ("ghproxy.homeboyc", "https://ghproxy.homeboyc.cn/"),
+    ("gh.xxooo.cf", "https://gh.xxooo.cf/"),
+    ("gitproxy.click", "https://gitproxy.click/"),
+    ("ghp.ci", "https://ghp.ci/"),
+    ("ghfile.geek", "https://ghfile.geekbang.fun/"),
+    ("gh.api.99988866", "https://gh.api.99988866.xyz/"),
+    ("gh.ddlc.top", "https://gh.ddlc.top/"),
+    ("ghproxy.markxu", "https://ghproxy.markxu.icu/"),
 ];
+
+/// 内置线路 + 用户自定义线路（exe 同目录的 routes.txt）
+fn all_routes() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = ROUTE_LIST
+        .iter()
+        .map(|(n, p)| (n.to_string(), p.to_string()))
+        .collect();
+    for (n, p) in load_custom_routes() {
+        if !v.iter().any(|(_, x)| x == &p) {
+            v.push((n, p));
+        }
+    }
+    v
+}
+
+/// 读 exe 同目录的 routes.txt，一行一条：
+///     名称|https://你的加速前缀/
+/// 或者只写前缀。镜像换域名/失效时，用户可以自己补，不用等软件更新。
+fn load_custom_routes() -> Vec<(String, String)> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(dir) = exe.parent() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("routes.txt")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+            continue;
+        }
+        let (name, prefix) = match t.split_once('|') {
+            Some((n, p)) => (n.trim().to_string(), p.trim().to_string()),
+            None => (t.to_string(), t.to_string()),
+        };
+        if !prefix.starts_with("http://") && !prefix.starts_with("https://") {
+            continue;
+        }
+        let mut prefix = prefix;
+        if !prefix.ends_with('/') {
+            prefix.push('/');
+        }
+        if name.is_empty() {
+            continue;
+        }
+        out.push((name, prefix));
+    }
+    out
+}
 
 // ---------------------------------------------------------------- 数据
 
@@ -374,7 +442,8 @@ fn scan_repos(
                 continue;
             }
             Err(ureq::Error::Status(code, _)) => {
-                errors.push(format!("{}：HTTP {}", repo, code));
+                // 504 之类的网关错误要说明白，否则用户只会看到一串数字
+                errors.push(format!("{}：HTTP {} —— {}", repo, code, http_hint(code)));
                 continue;
             }
             Err(e) => {
@@ -464,7 +533,8 @@ fn scan_repos(
 
 fn probe_one(name: &str, prefix: &str, url: &str) -> Route {
     let full = format!("{}{}", prefix, url);
-    let ag = agent(13);
+    // 测速只读 1MB，8 秒还拉不到数据就是这条线路不通，没必要拖满 13 秒
+    let ag = agent(8);
     let started = Instant::now();
     let mut route = Route {
         name: name.to_string(),
@@ -503,8 +573,10 @@ fn probe_one(name: &str, prefix: &str, url: &str) -> Route {
 }
 
 fn probe_routes(url: &str) -> Vec<Route> {
+    // 内置线路 + 用户自定义线路，一条一个线程并行测
+    let list = all_routes();
     let (tx, rx) = channel::<(usize, Route)>();
-    for (i, (name, prefix)) in ROUTE_LIST.iter().enumerate() {
+    for (i, (name, prefix)) in list.iter().enumerate() {
         let tx = tx.clone();
         let url = url.to_string();
         let name = name.to_string();
@@ -516,10 +588,11 @@ fn probe_routes(url: &str) -> Vec<Route> {
     }
     drop(tx);
 
-    let mut result: Vec<Option<Route>> = vec![None; ROUTE_LIST.len()];
-    let deadline = Instant::now() + Duration::from_secs(14);
+    let mut result: Vec<Option<Route>> = vec![None; list.len()];
+    // 线路多了以后给足 12 秒：拉不到数据的会自己超时，不用等满
+    let deadline = Instant::now() + Duration::from_secs(12);
     let mut got = 0;
-    while got < ROUTE_LIST.len() {
+    while got < list.len() {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
@@ -537,8 +610,8 @@ fn probe_routes(url: &str) -> Vec<Route> {
         .enumerate()
         .map(|(i, r)| {
             r.unwrap_or_else(|| Route {
-                name: ROUTE_LIST[i].0.to_string(),
-                prefix: ROUTE_LIST[i].1.to_string(),
+                name: list[i].0.clone(),
+                prefix: list[i].1.clone(),
                 speed: 0.0,
                 ok: false,
             })
@@ -573,11 +646,85 @@ fn fmt_speed(bps: f64) -> String {
     format!("{}/s", fmt_size(bps as u64))
 }
 
-fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut FileProg)) {    if let Ok(mut v) = prog.lock() {
+/// 这些状态码说明「这条线路自己不可用」，不是文件本身的问题。
+/// 尤其是 504：那是镜像网关请求 GitHub 上游超时，在它身上重试只会继续白等，
+/// 应当立刻换下一条线路（8 条线路一轮很快就试完了）。
+fn route_dead(code: u16) -> bool {
+    matches!(
+        code,
+        403 | 404 | 408 | 410 | 425 | 429 | 500 | 502 | 503 | 504 | 520 | 521 | 522 | 523 | 524
+    )
+}
+
+/// 把 HTTP 状态码翻译成人话，别让用户对着一串数字猜
+fn http_hint(code: u16) -> &'static str {
+    match code {
+        403 => "访问被拒（可能需要 Token 或线路被封）",
+        404 | 410 => "文件不存在（可能已被作者删除或改名）",
+        408 => "请求超时",
+        429 => "请求太频繁（稍等几分钟或填 Token）",
+        500 | 502 | 503 => "线路服务端出错",
+        504 => "线路超时（镜像请求 GitHub 没拿到数据）",
+        520 | 521 | 522 | 523 | 524 => "线路异常",
+        _ => "请求失败",
+    }
+}
+
+/// 所有线路都失败时，给一句能指导下一步的说法，而不是只丢一个状态码
+fn summarize_failure(errs: &[(String, String)]) -> String {
+    let n = errs.len();
+    if n == 0 {
+        return "所有线路均失败".into();
+    }
+    let tmo = errs
+        .iter()
+        .filter(|(_, e)| {
+            ["504", "502", "503", "超时", "timed out", "timeout"]
+                .iter()
+                .any(|k| e.contains(k))
+        })
+        .count();
+    let nf = errs
+        .iter()
+        .filter(|(_, e)| e.contains("404") || e.contains("410"))
+        .count();
+    if tmo == n {
+        "所有线路都超时（HTTP 504）· 网络受限或镜像临时故障，稍后再点「开始下载」可续传".into()
+    } else if nf == n {
+        "所有线路都返回 404 · 该文件可能已被作者删除".into()
+    } else if let Some((name, e)) = errs.last() {
+        format!("{} 条线路均失败，最后一条（{}）：{}", n, name, e)
+    } else {
+        "所有线路均失败".into()
+    }
+}
+
+fn set_prog(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize, f: impl FnOnce(&mut FileProg)) {
+    if let Ok(mut v) = prog.lock() {
         if let Some(p) = v.get_mut(idx) {
             f(p);
         }
     }
+}
+
+/// 这个文件是不是「网络/线路类」失败？这种值得自动再试一轮，
+/// 文件不存在（404）之类重试也没用，就别浪费用户时间。
+fn is_retryable(prog: &Arc<Mutex<Vec<FileProg>>>, idx: usize) -> bool {
+    let Ok(v) = prog.lock() else {
+        return false;
+    };
+    let Some(p) = v.get(idx) else {
+        return false;
+    };
+    if p.status != "失败" {
+        return false;
+    }
+    if p.error.contains("404") || p.error.contains("已删除") || p.error.contains("拒绝") {
+        return false;
+    }
+    ["504", "502", "503", "超时", "timed out", "timeout", "网络错误", "连接"]
+        .iter()
+        .any(|k| p.error.contains(k))
 }
 
 // ---------------------------------------------------------------- 断点续传
@@ -773,6 +920,7 @@ fn download_segmented(
     prog: &Arc<Mutex<Vec<FileProg>>>,
     idx: usize,
     cancel: &Arc<AtomicBool>,
+    dead_routes: &Arc<Mutex<Vec<String>>>,
 ) -> Result<u64, String> {
     let segs: u64 = if size >= 16 * 1024 * 1024 {
         8
@@ -790,6 +938,8 @@ fn download_segmented(
     let counter = Arc::new(AtomicU64::new(0));
     let unsupported = Arc::new(AtomicBool::new(false));
     let broken = Arc::new(AtomicBool::new(false));
+    // 连续撞上多条死线路 → 分片阶段放弃，交给上层决定（通常是回退单连接或直接报超时）
+    let dead_all = Arc::new(AtomicBool::new(false));
     // 每段下到哪了 + 「请重连」信号。用来揪出被限速拖后腿的段：
     // 一条连接被运营商/GitHub 单连接限速时不会报错，就是慢慢爬，
     // 光看「有没有数据」发现不了，得跟同伴比才知道它是在爬。
@@ -822,11 +972,13 @@ fn download_segmented(
         let cancel2 = cancel.clone();
         let unsupported2 = unsupported.clone();
         let broken2 = broken.clone();
+        let dead_all2 = dead_all.clone();
         let routes2 = routes.clone();
         let base2 = base.clone();
         let sd2 = seg_done.clone();
         let kick2 = kick.clone();
         let boost2 = boost.clone();
+        let dead2 = dead_routes.clone();
         let si = i as usize;
 
         handles.push(std::thread::spawn(move || {
@@ -834,6 +986,9 @@ fn download_segmented(
             // 所以每次重试都往后挪一条线路，而不是死磕同一条。
             let mut route = route0;
             let mut fails: u32 = 0;
+            // 连续撞上「线路级错误」（504/502 之类）的次数：连续 3 条线路都这样，
+            // 说明这一轮基本没戏了，别让 8 个分片各自把整轮线路再试一遍。
+            let mut dead_fails: u32 = 0;
             loop {
                 if cancel2.load(Ordering::SeqCst) {
                     return;
@@ -868,6 +1023,25 @@ fn download_segmented(
                 let resp = match resp {
                     Ok(r) => r,
                     Err(ureq::Error::Status(416, _)) => return,
+                    Err(ureq::Error::Status(code, _)) if route_dead(code) => {
+                        // 线路自己挂了（504 等）：拉黑，换下一条；连续三条都这样就直接收工
+                        if let Some((rname, _)) = routes2.get(route % routes2.len().max(1)) {
+                            if let Ok(mut d) = dead2.lock() {
+                                if !d.iter().any(|x| x == rname) {
+                                    d.push(rname.clone());
+                                }
+                            }
+                        }
+                        dead_fails += 1;
+                        if dead_fails >= 3 {
+                            dead_all2.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                        fails += 1;
+                        route += 1;
+                        std::thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
                     Err(_) => {
                         fails += 1;
                         route += 1;
@@ -1110,6 +1284,9 @@ fn download_segmented(
     if cancel.load(Ordering::SeqCst) {
         return Err("CANCELLED".to_string());
     }
+    if dead_all.load(Ordering::SeqCst) {
+        return Err("ROUTES_DEAD".to_string());
+    }
     if broken.load(Ordering::SeqCst) {
         return Err("分片下载中断（断点已保留）".to_string());
     }
@@ -1161,6 +1338,7 @@ fn download_one(
     routes: &[(String, String)],
     prog: &Arc<Mutex<Vec<FileProg>>>,
     cancel: &Arc<AtomicBool>,
+    dead_routes: &Arc<Mutex<Vec<String>>>,
     idx: usize,
 ) {
     if cancel.load(Ordering::SeqCst) {
@@ -1226,21 +1404,54 @@ fn download_one(
         }
     });
 
-    let mut last_error = String::new();
+    // 本轮任务里被判定为「线路挂了」的名字（504/502 之类），后面的文件不再浪费时间试它。
+    // 多文件下载时这一条能省掉几十次无意义的超时等待。
+    let live: Vec<(String, String)> = {
+        let dead = dead_routes.lock().map(|x| x.clone()).unwrap_or_default();
+        let v: Vec<(String, String)> = routes
+            .iter()
+            .filter(|(n, _)| !dead.iter().any(|d| d == n))
+            .cloned()
+            .collect();
+        // 全被标记过就都放行，免得一条线路都不试
+        if v.is_empty() {
+            routes.to_vec()
+        } else {
+            v
+        }
+    };
+    let mut route_errs: Vec<(String, String)> = Vec::new();
+    // 连续多少条线路是「线路级失败」（超时/连不上）。连撞 3 条就没必要再一条条等超时了，
+    // 线路表扩到 20 条以后这一条很重要，否则全挂时用户要白等好几分钟。
+    let mut dead_streak: u32 = 0;
 
-    for (ri, (_rname, prefix)) in routes.iter().enumerate() {
+    for (ri, (rname, prefix)) in live.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
             set_prog(prog, idx, |p| p.status = "已取消".into());
             return;
         }
+        // 分片阶段刚把这条线路判死（504 之类）→ 直接跳过，别再多等一轮超时
+        if ri > 0 {
+            if let Ok(d) = dead_routes.lock() {
+                if d.iter().any(|x| x == rname) {
+                    continue;
+                }
+            }
+        }
+        // 本条线路自己的错误，循环末尾汇总，避免上一条线路的错误串到这一条
+        let mut route_err = String::new();
+        // 5xx 允许在这条线路上再试一次：一次抖动不该判死，但也不能像以前那样死等 3 次
+        let mut srv_retry: u32 = 0;
         let full = format!("{}{}", prefix, row.url);
         let ag = dl_agent();
 
-        // 大文件先走多连接分片；不支持或失败时自动退回单连接
-        if row.size >= 2 * 1024 * 1024 {
+        // 大文件先走多连接分片；不支持或失败时自动退回单连接。
+        // 只在最靠前的那条线路上分片——分片失败通常是线路/协议问题，
+        // 换条线路重新切 8 段只是把同一轮失败再演一遍，单连接试更快。
+        if row.size >= 2 * 1024 * 1024 && ri == 0 {
             match download_segmented(
                 &row.url,
-                routes,
+                &live,
                 ri,
                 &dir,
                 &row.target,
@@ -1248,6 +1459,7 @@ fn download_one(
                 prog,
                 idx,
                 cancel,
+                dead_routes,
             ) {
                 Ok(_) => {
                     if dest.exists() {
@@ -1270,8 +1482,11 @@ fn download_one(
                     return;
                 }
                 Err(e) => {
-                    if e != "RANGE_SKIP" && e != "RANGE_UNSUPPORTED" {
-                        last_error = e;
+                    if e == "ROUTES_DEAD" {
+                        // 分片阶段连撞三条死线路，剩下的没必要再一条条等超时了
+                        route_err = format!("HTTP 504：{}", http_hint(504));
+                    } else if e != "RANGE_SKIP" && e != "RANGE_UNSUPPORTED" {
+                        route_err = e;
                     }
                     // 继续往下走单连接流程
                 }
@@ -1304,7 +1519,7 @@ fn download_one(
                     let mut file = match opened {
                         Ok(f) => f,
                         Err(e) => {
-                            last_error = format!("无法写入文件：{}", e);
+                            route_err = format!("无法写入文件：{}", e);
                             break;
                         }
                     };
@@ -1322,7 +1537,7 @@ fn download_one(
                             Ok(0) => break,
                             Ok(n) => {
                                 if let Err(e) = file.write_all(&buf[..n]) {
-                                    last_error = format!("写入失败：{}", e);
+                                    route_err = format!("写入失败：{}", e);
                                     failed = true;
                                     break;
                                 }
@@ -1336,7 +1551,7 @@ fn download_one(
                                 }
                             }
                             Err(e) => {
-                                last_error = format!("传输中断：{}", e);
+                                route_err = format!("传输中断：{}", e);
                                 failed = true;
                                 break;
                             }
@@ -1353,7 +1568,7 @@ fn download_one(
                         continue;
                     }
                     if total > 0 && received < total {
-                        last_error = format!("文件不完整：{}/{}", received, total);
+                        route_err = format!("文件不完整：{}/{}", received, total);
                         continue;
                     }
                     if dest.exists() {
@@ -1371,26 +1586,47 @@ fn download_one(
                     return;
                 }
                 Err(ureq::Error::Status(code, _)) => {
-                    last_error = if code == 404 {
-                        "HTTP 404：资源已不存在".to_string()
-                    } else if code == 403 {
-                        "HTTP 403：访问被拒".to_string()
-                    } else {
-                        format!("HTTP {}", code)
-                    };
-                    if code == 404 || code == 410 {
-                        // 这条线路给不出文件，换下一条
+                    route_err = format!("HTTP {}：{}", code, http_hint(code));
+                    if route_dead(code) {
+                        // 5xx 多半是镜像网关临时抽风，同一条线路给一次机会（隔 0.7 秒）；
+                        // 4xx 是文件/权限问题，重试没有意义，直接换线。
+                        // 以前不分青红皂白重试 3 次，8 条线路就是 24 次 504，用户要白等好几分钟。
+                        if code >= 500 && srv_retry < 1 {
+                            srv_retry += 1;
+                            std::thread::sleep(Duration::from_millis(700));
+                            continue;
+                        }
+                        // 记进黑名单：本轮任务后面的文件不再浪费时间试它
+                        if let Ok(mut d) = dead_routes.lock() {
+                            if !d.iter().any(|x| x == rname) {
+                                d.push(rname.clone());
+                            }
+                        }
                         break;
                     }
                 }
                 Err(e) => {
-                    last_error = format!("{}", e);
+                    route_err = format!("{}", e);
                 }
             }
             if attempt < 3 {
                 std::thread::sleep(Duration::from_millis(300 + attempt as u64 * 500));
             }
         }
+        // 记下这条线路的结果，全部失败时用来判断「是网络/镜像问题还是文件没了」
+        let systemic = !route_err.is_empty()
+            && !route_err.contains("404")
+            && !route_err.contains("403");
+        if systemic {
+            dead_streak += 1;
+            if dead_streak >= 3 {
+                route_errs.push((rname.clone(), route_err));
+                break;
+            }
+        } else {
+            dead_streak = 0;
+        }
+        route_errs.push((rname.clone(), route_err));
     }
 
     // 一个字节都没下到就别留清单，免得下次启动列出一堆 0% 的「未完成」
@@ -1398,13 +1634,10 @@ fn download_one(
         let _ = std::fs::remove_file(&meta);
     }
 
+    let summary = summarize_failure(&route_errs);
     set_prog(prog, idx, |p| {
         p.status = "失败".into();
-        p.error = if last_error.is_empty() {
-            "所有线路均失败".into()
-        } else {
-            last_error.clone()
-        };
+        p.error = summary;
         p.speed = 0.0;
         p.note.clear();
     });
@@ -1445,6 +1678,8 @@ fn spawn_download(
     // 每条分到的带宽太小，反而更容易被限速拖死。所以有大文件时降并发。
     let big = rows.iter().any(|r| r.size >= 16 * 1024 * 1024);
     let threads = if big { 2 } else { 3 }.min(total.max(1));
+    // 本轮任务内共享的「线路黑名单」：某条线路 504 后，后面的文件不再试它
+    let dead_routes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     for _ in 0..threads {
         let rows = rows.clone();
         let routes = routes.clone();
@@ -1452,12 +1687,42 @@ fn spawn_download(
         let prog = prog.clone();
         let cancel = cancel.clone();
         let outdir = outdir.clone();
+        let dead_routes = dead_routes.clone();
         std::thread::spawn(move || loop {
             let i = cursor.fetch_add(1, Ordering::SeqCst);
             if i >= rows.len() {
                 break;
             }
-            download_one(&rows[i], &outdir, &routes, &prog, &cancel, i);
+            download_one(
+                &rows[i],
+                &outdir,
+                &routes,
+                &prog,
+                &cancel,
+                &dead_routes,
+                i,
+            );
+            // 偶发的 504/超时：清空黑名单、等 2 秒，自动再试一整轮。
+            // 只补一次——网络真断了就老实报错，不无限转圈。
+            if !cancel.load(Ordering::SeqCst) && is_retryable(&prog, i) {
+                set_prog(&prog, i, |p| {
+                    p.status = "重试中".into();
+                    p.error.clear();
+                });
+                std::thread::sleep(Duration::from_secs(2));
+                if let Ok(mut d) = dead_routes.lock() {
+                    d.clear();
+                }
+                download_one(
+                    &rows[i],
+                    &outdir,
+                    &routes,
+                    &prog,
+                    &cancel,
+                    &dead_routes,
+                    i,
+                );
+            }
         });
     }
 
@@ -1479,8 +1744,8 @@ fn spawn_download(
                     } else if p.status == "排队中" {
                         p.speed = 0.0;
                         all_finished = false;
-                    } else if p.status == "合并中" {
-                        // 合并阶段也是没干完，别在这儿提前判完成
+                    } else if p.status == "合并中" || p.status == "重试中" {
+                        // 合并/等待自动重试也是没干完，别在这儿提前判完成
                         p.speed = 0.0;
                         all_finished = false;
                     } else {
@@ -1702,17 +1967,22 @@ impl App {
     fn route_pairs(&self) -> Vec<(String, String)> {
         let mut list: Vec<Route> = self.routes.iter().filter(|r| r.ok).cloned().collect();
         if list.is_empty() {
-            return ROUTE_LIST
-                .iter()
-                .map(|(n, p)| (n.to_string(), p.to_string()))
-                .collect();
+            // 一条都没测通：把全部线路按原顺序交给下载流程去扫
+            return all_routes();
         }
         list.sort_by(|a, b| {
             b.speed
                 .partial_cmp(&a.speed)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        list.into_iter().map(|r| (r.name, r.prefix)).collect()
+        let mut pairs: Vec<(String, String)> =
+            list.into_iter().map(|r| (r.name, r.prefix)).collect();
+        // 兜底：镜像全挂时直连是最后一根稻草。测速只读 1MB，那一下超时
+        // 不代表整包下不动，所以直连永远留在队尾再试一次。
+        if !pairs.iter().any(|(_, p)| p.is_empty()) {
+            pairs.push(("直连（兜底）".to_string(), String::new()));
+        }
+        pairs
     }
 
     fn start_download(&mut self) {
@@ -3847,6 +4117,14 @@ impl eframe::App for App {
                                                         egui::Color32::from_rgb(122, 76, 12),
                                                         SUN,
                                                     ),
+                                                    // 网络类失败后会自动再试一轮，给个明确状态，
+                                                    // 否则用户看到「失败」两个字就会来问
+                                                    "重试中" => pill(
+                                                        ui,
+                                                        "自动重试中…",
+                                                        egui::Color32::from_rgb(120, 40, 20),
+                                                        egui::Color32::from_rgb(255, 214, 194),
+                                                    ),
                                                     "完成" => pill(
                                                         ui,
                                                         "已完成",
@@ -4030,11 +4308,20 @@ fn bench_download(args: &[String]) {
     let prog = Arc::new(Mutex::new(Vec::new()));
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
+    // RO_DL_ROUTES="http://a/,http://b/" 可以模拟多条线路，用来测换线路/黑名单
+    let routes: Vec<(String, String)> = match std::env::var("RO_DL_ROUTES") {
+        Ok(v) if !v.trim().is_empty() => v
+            .split(',')
+            .enumerate()
+            .map(|(i, p)| (format!("线路{}", i + 1), p.trim().to_string()))
+            .collect(),
+        _ => vec![("直连".to_string(), String::new())],
+    };
     let t0 = Instant::now();
     spawn_download(
         vec![row],
         outdir,
-        vec![("直连".to_string(), String::new())],
+        routes,
         prog.clone(),
         cancel,
         done.clone(),
@@ -4076,6 +4363,15 @@ fn main() -> eframe::Result<()> {
     }
     if args.iter().any(|a| a == "--fontcheck") {
         font_check();
+        return Ok(());
+    }
+    // 自测入口：打印最终生效的线路表（内置 + exe 同目录 routes.txt）
+    if args.iter().any(|a| a == "--routes") {
+        let list = all_routes();
+        println!("共 {} 条线路：", list.len());
+        for (i, (n, p)) in list.iter().enumerate() {
+            println!("{:>2}. {:<20} {}", i + 1, n, p);
+        }
         return Ok(());
     }
     // 隐藏自测入口：列出某个目录里可续传的任务

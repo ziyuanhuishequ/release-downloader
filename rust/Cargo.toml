@@ -1,6 +1,6 @@
 [package]
 name = "release-organizer"
-version = "1.6.2"
+version = "1.6.3"
 edition = "2021"
 description = "GitHub Release downloader and platform organizer"
 
