@@ -30,21 +30,21 @@
 
 ## 界面
 
-| 下载中（进度条下是总速度） | 卡顿换线路时的提示 |
+| 20 条线路的实测速度（点右上角标签展开） | 下载中（进度条下是总速度） |
 | --- | --- |
-| ![下载中](screenshots/downloading.png) | ![卡顿提示](screenshots/reconnecting.png) |
+| ![线路实测](screenshots/routes.png) | ![下载中](screenshots/downloading.png) |
 
-| 自动重启连接提速 | 断点续传提示 |
+| 换线路时的提示 | 自动重启连接提速 |
 | --- | --- |
-| ![重启提速](screenshots/boosting.png) | ![断点续传](screenshots/resume.png) |
+| ![卡顿提示](screenshots/reconnecting.png) | ![重启提速](screenshots/boosting.png) |
 
-| 下载完成提醒 | 字段悬停说明 |
+| 断点续传提示 | 下载完成提醒 |
 | --- | --- |
-| ![完成提醒](screenshots/done-dialog.png) | ![悬停说明](screenshots/tooltip.png) |
+| ![断点续传](screenshots/resume.png) | ![完成提醒](screenshots/done-dialog.png) |
 
-| 空状态 | |
+| 字段悬停说明 | 空状态 |
 | --- | --- |
-| ![空状态](screenshots/empty.png) | |
+| ![悬停说明](screenshots/tooltip.png) | ![空状态](screenshots/empty.png) |
 
 ## 使用
 
