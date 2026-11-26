@@ -17,3 +17,17 @@ Thumbs.db
 # 交付用的源码压缩包
 /*-源码-v*.zip
 /_selftest_out/
+
+# 扩展：打包产物、签名私钥、测试用浏览器配置
+/*-浏览器扩展-v*.zip
+/浏览器扩展/
+/extension.pem
+/extension.crx
+/_cprof/
+
+# 扩展测试脚手架（本地跑 CDP 用，不进仓库）
+/_cdp.mjs
+/_reload.mjs
+/_t[0-9]*.mjs
+/_dbg*.mjs
+/_shot_*.png

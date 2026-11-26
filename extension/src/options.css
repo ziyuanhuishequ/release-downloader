@@ -1,0 +1,96 @@
+:root {
+  --ink: #1A1E30;
+  --cream: #FFF3DC;
+  --paper: #FFFDF6;
+  --coral: #FF6A3D;
+  --mint: #2ED3A5;
+  --sun: #FFC94D;
+  --soft: #F1E6CF;
+  --text2: #5B5F70;
+  --red: #C63020;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--soft);
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  padding: 28px 16px 60px;
+}
+
+.page { max-width: 720px; margin: 0 auto; }
+
+.hd { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.logo { width: 56px; height: 56px; image-rendering: pixelated; border: 3px solid var(--ink); background: var(--cream); padding: 2px; }
+h1 { font-size: 21px; letter-spacing: .2px; }
+.sub { font-size: 12.5px; color: var(--text2); margin-top: 2px; }
+
+.card {
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  box-shadow: 5px 5px 0 rgba(26, 30, 48, .82);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.card h2 { font-size: 14.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.opt {
+  font-size: 10.5px; font-weight: 700; color: var(--text2);
+  border: 2px solid var(--ink); padding: 0 6px; background: var(--sun);
+}
+
+.line { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed #E6DCC6; }
+.line:last-child { border-bottom: none; }
+.line span { flex: 1; }
+.line b { display: block; font-size: 13.5px; }
+.line i { display: block; font-size: 12px; color: var(--text2); font-style: normal; margin-top: 2px; line-height: 1.6; }
+.lab { font-size: 13.5px; font-weight: 700; flex: 0 0 auto !important; padding-top: 4px; }
+
+input[type="checkbox"] {
+  appearance: none; width: 18px; height: 18px; min-width: 18px;
+  border: 2px solid var(--ink); background: #fff; margin-top: 2px; cursor: pointer; position: relative;
+}
+input[type="checkbox"]:checked { background: var(--coral); }
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 4px; top: 0;
+  width: 6px; height: 11px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg);
+}
+
+select, input[type="password"], input[type="text"], textarea {
+  border: 2px solid var(--ink); background: #fff; color: var(--ink);
+  padding: 6px 8px; font-size: 13px; outline: none; font-family: inherit;
+}
+select:focus, input:focus, textarea:focus { box-shadow: 2px 2px 0 var(--coral); }
+input[type="password"], input[type="text"] { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.7; resize: vertical; }
+
+.preview {
+  font-size: 12px; color: var(--text2); background: var(--cream);
+  border: 2px dashed #C9BEA4; padding: 7px 9px; margin: 4px 0 10px;
+  word-break: break-all;
+}
+.preview code { font-size: 11.5px; color: var(--ink); }
+
+.note { font-size: 12px; color: var(--text2); line-height: 1.75; margin-bottom: 8px; }
+.note.tiny { font-size: 11px; margin-top: 6px; margin-bottom: 0; }
+.note code, .list code { background: var(--cream); border: 1px solid #E0D5BE; padding: 0 4px; font-size: 11.5px; }
+
+.row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+
+.list { font-size: 12.5px; color: var(--text2); line-height: 1.85; padding-left: 18px; }
+.list b { color: var(--ink); }
+
+.btn {
+  border: 3px solid var(--ink); background: var(--coral); color: #fff;
+  font-size: 14px; font-weight: 800; padding: 9px 20px; cursor: pointer;
+  box-shadow: 3px 3px 0 var(--ink); letter-spacing: .5px;
+}
+.btn:hover { background: #FF7E55; }
+.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+.btn.small { font-size: 12px; padding: 5px 12px; box-shadow: 2px 2px 0 var(--ink); border-width: 2px; }
+.btn.ghost { background: var(--paper); color: var(--ink); }
+
+.foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ok { color: #087458; font-size: 12.5px; font-weight: 700; }
+.repo { margin-left: auto; font-size: 12px; color: var(--text2); }

@@ -27,6 +27,7 @@
 - **Token 支持**：未登录 GitHub API 每小时限 60 次，填 Token 可提升额度
 - **完成提醒**：全部下完后弹窗询问是否直接打开保存文件夹
 - **像素风界面**：全部控件手绘，无第三方 UI 库皮肤
+- **浏览器扩展版**：不想装软件时，在 Release 页勾选即下（见下方「浏览器扩展」一节）
 
 ## 界面
 
@@ -54,6 +55,20 @@
 4. 选好保存目录，点「开始下载」
 
 Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对应字段约 0.3 秒会浮出说明。
+
+## 浏览器扩展（不装软件也能用）
+
+同一个工具还有个纯浏览器版：在 GitHub Release 页面右下角直接勾选下载，不用装 exe。
+支持 Chrome / Edge / Brave / 360 / QQ 等 Chromium 内核浏览器，也能打包成 Firefox 版。
+
+| 工具栏弹窗 | Release 页注入的面板 |
+| --- | --- |
+| ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
+
+安装：下载 `GitHub下载整理工具-浏览器扩展-v1.0.0-chrome.zip` → 解压到固定目录 →
+打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
+
+用法、设置、与桌面版的差别见 [extension/README.md](extension/README.md)。
 
 ## 编译
 

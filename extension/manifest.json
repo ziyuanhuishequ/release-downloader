@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Release 下载助手",
+  "version": "1.0.0",
+  "description": "在 GitHub 发布页一键勾选资源、自动测速选最快镜像、按仓库版本归档下载。纯浏览器运行，不用装桌面软件。",
+  "minimum_chrome_version": "102",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "GitHub Release 下载助手",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/bg.js"
+  },
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "storage",
+    "downloads",
+    "contextMenus",
+    "notifications"
+  ],
+  "optional_permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://api.github.com/*",
+    "https://github.com/*",
+    "https://codeload.github.com/*",
+    "https://objects.githubusercontent.com/*",
+    "https://raw.githubusercontent.com/*",
+    "https://gh-proxy.com/*",
+    "https://ghproxy.net/*",
+    "https://ghfast.top/*",
+    "https://gh-proxy.org/*",
+    "https://github.moeyy.xyz/*",
+    "https://ghproxy.cc/*",
+    "https://gh.llkk.cc/*",
+    "https://hub.gitmirror.com/*",
+    "https://cors.isteed.cc/*",
+    "https://gh-proxy.net/*",
+    "https://ghproxy.cfd/*",
+    "https://ghproxy.homeboyc.cn/*",
+    "https://gh.xxooo.cf/*",
+    "https://gitproxy.click/*",
+    "https://ghp.ci/*",
+    "https://ghfile.geekbang.fun/*",
+    "https://gh.api.99988866.xyz/*",
+    "https://gh.ddlc.top/*",
+    "https://ghproxy.markxu.icu/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://github.com/*"
+      ],
+      "js": [
+        "src/common.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

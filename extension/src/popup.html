@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GitHub Release 下载助手</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="app">
+  <header class="hd">
+    <img class="logo" src="../icons/icon48.png" alt="">
+    <div class="tt">
+      <div class="t1">Release 下载助手</div>
+      <div class="t2">测速选线 · 自动归档 · 纯浏览器</div>
+    </div>
+    <button class="ico" id="btnOptions" title="打开设置">设置</button>
+  </header>
+
+  <div class="scan">
+    <input id="repo" type="text" spellcheck="false" placeholder="owner/repo，例如 sharkdp/bat">
+    <button id="btnScan" class="act">扫描</button>
+  </div>
+
+  <div class="relbar hide" id="relbar">
+    <select id="rel"></select>
+    <button id="btnRe" class="mini" title="重新扫描">↻</button>
+  </div>
+
+  <div class="chipbar">
+    <button class="tg on" data-filter="all">全部</button>
+    <button class="tg" data-filter="win">Windows</button>
+    <button class="tg" data-filter="mac">macOS</button>
+    <button class="tg" data-filter="linux">Linux</button>
+    <button class="tg link" id="btnAll">全选</button>
+  </div>
+
+  <main id="body" class="body">
+    <div class="hint">
+      <div class="big">粘贴仓库地址就能下</div>
+      <div>也可以直接打开 GitHub 的 Release 页面，右下角会出现下载面板。</div>
+    </div>
+  </main>
+
+  <footer class="ft">
+    <div class="route" id="route">
+      <span class="pill wait">未测速</span>
+      <span class="rt-txt">下载前会自动挑最快的线路</span>
+      <button class="lnk" id="btnProbe">测速</button>
+    </div>
+    <button class="go" id="btnGo" disabled>选择文件后下载</button>
+    <div class="bottom">
+      <span id="queue">队列空闲</span>
+      <a href="#" id="lnkHelp">怎么安装到别的浏览器？</a>
+    </div>
+  </footer>
+</div>
+<script src="common.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

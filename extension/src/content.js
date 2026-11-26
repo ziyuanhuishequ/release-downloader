@@ -1,0 +1,345 @@
+/* 内容脚本：在 GitHub 发布页右下角挂一个像素风面板
+ * 勾选资源 → 交给后台测速选线 → 浏览器原生下载并按 仓库/版本 归档
+ */
+(function () {
+  'use strict';
+  if (window.__ghdlInjected) return;
+  window.__ghdlInjected = true;
+
+  var state = {
+    open: false,
+    loading: false,
+    repo: '',
+    owner: '',
+    tag: '',
+    assets: [],
+    picked: {},
+    filter: 'all',
+    probe: null,
+    error: '',
+    panel: null,
+    host: null
+  };
+
+  var CSS = [
+    ':host{all:initial}',
+    '*{box-sizing:border-box;margin:0;padding:0}',
+    '.wrap{position:fixed;right:20px;bottom:20px;z-index:2147483000;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:13px;color:#1A1E30;line-height:1.45}',
+    '.fab{width:56px;height:56px;background:#FF6A3D;border:3px solid #1A1E30;box-shadow:4px 4px 0 #1A1E30;cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative;transition:transform .08s}',
+    '.fab:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 #1A1E30}',
+    '.fab:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #1A1E30}',
+    '.fab svg{width:28px;height:28px;display:block}',
+    '.fab .dot{position:absolute;right:-6px;top:-8px;background:#2ED3A5;border:2px solid #1A1E30;min-width:22px;height:22px;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}',
+    '.card{width:392px;max-height:min(560px,calc(100vh - 60px));background:#FFFDF6;border:3px solid #1A1E30;box-shadow:6px 6px 0 rgba(26,30,48,.85);display:flex;flex-direction:column;overflow:hidden}',
+    '.hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1A1E30;color:#FFF3DC}',
+    '.hd .t{font-weight:700;font-size:13.5px;letter-spacing:.3px}',
+    '.hd .repo{margin-left:auto;font-size:11.5px;color:#C9CBD8;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.hd .x{width:22px;height:22px;border:2px solid #FFF3DC;background:transparent;color:#FFF3DC;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}',
+    '.hd .x:hover{background:#FF6A3D;border-color:#FF6A3D;color:#fff}',
+    '.bar{display:flex;gap:6px;padding:8px 10px;border-bottom:2px solid #1A1E30;background:#FFF3DC;flex-wrap:wrap;align-items:center}',
+    '.tg{border:2px solid #1A1E30;background:#FFFDF6;padding:2px 8px;font-size:11.5px;cursor:pointer;font-weight:600;color:#5B5F70}',
+    '.tg:hover{background:#fff}',
+    '.tg.on{background:#1A1E30;color:#FFF3DC}',
+    '.cnt{margin-left:auto;font-size:11.5px;color:#5B5F70}',
+    '.list{overflow:auto;flex:1;padding:4px 0}',
+    '.row{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border-bottom:1px dashed #E6DCC6;cursor:pointer}',
+    '.row:hover{background:#FFF7E6}',
+    '.row.sel{background:#FFF1DE}',
+    '.cb{width:15px;height:15px;min-width:15px;border:2px solid #1A1E30;background:#fff;margin-top:2px;position:relative}',
+    '.row.sel .cb{background:#FF6A3D}',
+    '.row.sel .cb:after{content:"";position:absolute;left:3px;top:0;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}',
+    '.nm{flex:1;font-size:12px;word-break:normal;overflow-wrap:anywhere;line-height:1.4;font-family:ui-monospace,Menlo,Consolas,monospace}',
+    '.sz{font-size:11.5px;color:#5B5F70;white-space:nowrap;margin-top:1px}',
+    '.ft{border-top:2px solid #1A1E30;padding:9px 10px;display:flex;flex-direction:column;gap:7px;background:#FFF3DC}',
+    '.rt{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#5B5F70}',
+    '.pill{border:2px solid #1A1E30;padding:1px 7px;font-weight:700;font-size:11px;background:#CEF5E8;color:#087458}',
+    '.pill.bad{background:#FFD6C2;color:#782814}',
+    '.pill.wait{background:#FFECBE;color:#965C06}',
+    '.lk{margin-left:auto;color:#782814;cursor:pointer;text-decoration:underline;font-size:11px}',
+    '.go{width:100%;border:3px solid #1A1E30;background:#FF6A3D;color:#fff;font-weight:800;font-size:13.5px;padding:9px 10px;cursor:pointer;box-shadow:3px 3px 0 #1A1E30;letter-spacing:.5px}',
+    '.go:hover{background:#FF7E55}',
+    '.go:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #1A1E30}',
+    '.go[disabled]{background:#D9D2C2;color:#8A8577;cursor:not-allowed;box-shadow:none}',
+    '.msg{padding:14px 12px;font-size:12.5px;color:#5B5F70;text-align:center;line-height:1.7}',
+    '.msg b{color:#C63020}',
+    '.tip{font-size:11px;color:#5B5F70;padding:0 2px}',
+    '.sk{padding:10px 12px;font-size:12.5px;color:#5B5F70}'
+  ].join('');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function detect() {
+    var m = location.pathname.match(/^\/([^/]+)\/([^/]+)\/releases(?:\/(tag|latest|download)\/?(.*))?\/?$/);
+    if (!m) return null;
+    if (m[3] === 'download') return null;      // 具体文件页不挂面板
+    return { owner: m[1], repo: m[2], tag: m[3] === 'tag' ? decodeURIComponent(m[4] || '') : '' };
+  }
+
+  /* 兜底：直接从页面里扒下载链接（API 不通、私有仓库、限流时用） */
+  function assetsFromDom() {
+    var seen = {};
+    var out = [];
+    document.querySelectorAll('a[href*="/releases/download/"]').forEach(function (a) {
+      var href = a.getAttribute('href') || '';
+      var abs = href.indexOf('http') === 0 ? href : location.origin + href;
+      var p = parseAssetUrl(abs);
+      if (!p || seen[p.asset]) return;
+      seen[p.asset] = true;
+      var sizeText = '';
+      var box = a.closest('div.Box-row') || a.closest('li') || a.parentElement;
+      if (box) {
+        var sp = box.querySelector('span.color-fg-muted, span.text-sm.color-fg-muted');
+        if (sp && /\d/.test(sp.textContent)) sizeText = sp.textContent;
+      }
+      out.push({ name: p.asset, size: parseSizeText(sizeText), url: abs, type: '', downloads: 0 });
+    });
+    return out;
+  }
+
+  function matchesFilter(a) {
+    if (state.filter === 'all') return true;
+    return platformOf(a.name) === state.filter;
+  }
+
+  function pickedAssets() {
+    return state.assets.filter(function (a) { return state.picked[a.name] && matchesFilter(a); });
+  }
+
+  async function loadAssets() {
+    var d = detect();
+    if (!d) return;
+    if (state.repo === d.owner + '/' + d.repo && state.assets.length && state.tag === d.tag) return;
+    state.owner = d.owner;
+    state.repo = d.owner + '/' + d.repo;
+    state.tag = d.tag;
+    state.loading = true;
+    state.error = '';
+    state.assets = [];
+    state.picked = {};
+    render();
+    var res = await bgSend('list-assets', { repo: state.repo, tag: d.tag || 'latest' });
+    if (res && !res.error && res.release) {
+      state.tag = res.release.tag;
+      state.assets = res.release.assets || [];
+    } else {
+      // API 不可用就退回页面 DOM
+      var dom = assetsFromDom();
+      if (dom.length) {
+        state.assets = dom;
+        state.tag = d.tag || (location.pathname.match(/\/tag\/(.+)$/) || [])[1] || 'latest';
+      } else {
+        state.error = (res && res.error) || '没找到这个版本的资源';
+      }
+    }
+    state.loading = false;
+    // 默认勾选：小体积优先全选，大仓库只勾 Windows
+    var total = state.assets.length;
+    var autoWin = state.assets.some(function (a) { return platformOf(a.name) === 'win'; });
+    state.assets.forEach(function (a) {
+      state.picked[a.name] = autoWin && total > 6 ? platformOf(a.name) === 'win' : true;
+    });
+    render();
+    if (state.assets.length) probeBest();
+  }
+
+  async function probeBest() {
+    // 用最小的那个文件测速，代价最低
+    var sorted = state.assets.slice().sort(function (a, b) { return (a.size || 0) - (b.size || 0); });
+    var target = (sorted.filter(function (a) { return a.size > 0; })[0] || sorted[0]);
+    if (!target) return;
+    state.probe = { loading: true };
+    render();
+    var res = await bgSend('probe', { url: target.url, key: state.repo + '@' + state.tag });
+    state.probe = res && res.list ? res : { error: (res && res.error) || '测速失败' };
+    render();
+  }
+
+  function render() {
+    if (!state.host) return;
+    var root = state.host.shadowRoot;
+    var d = detect();
+    if (!d) { state.host.style.display = 'none'; return; }
+    state.host.style.display = '';
+
+    var picked = pickedAssets();
+    var pickedSize = picked.reduce(function (s, a) { return s + (a.size || 0); }, 0);
+
+    var body;
+    if (state.loading) {
+      body = '<div class="sk">正在读取这个版本的资源…</div>';
+    } else if (state.error) {
+      body = '<div class="msg"><b>' + esc(state.error) + '</b><br>可以点右下角图标重试，或在设置里填 GitHub Token</div>';
+    } else if (!state.assets.length) {
+      body = '<div class="msg">这个版本没有可下载的资源</div>';
+    } else {
+      var rows = state.assets.filter(matchesFilter).map(function (a) {
+        var on = !!state.picked[a.name];
+        return '<div class="row ' + (on ? 'sel' : '') + '" data-name="' + esc(a.name) + '">' +
+          '<div class="cb"></div>' +
+          '<div class="nm">' + esc(a.name) + '</div>' +
+          '<div class="sz">' + (a.size ? fmtSize(a.size) : '—') + '</div>' +
+          '</div>';
+      }).join('');
+      body = '<div class="list">' + rows + '</div>';
+    }
+
+    var routeHtml = '';
+    if (state.probe && state.probe.loading) {
+      routeHtml = '<span class="pill wait">测速中…</span><span>正在挑最快的线路</span>';
+    } else if (state.probe && state.probe.list) {
+      var okList = state.probe.list.filter(function (r) { return r.ok; });
+      var top = okList[0];
+      if (top) {
+        routeHtml = '<span class="pill">' + esc(top.name) + ' ' + fmtSpeed(top.bps) + '</span>' +
+          '<span>' + okList.length + ' 条可测速</span>';
+      } else if (state.probe.blocked) {
+        routeHtml = '<span class="pill wait">测速受限</span><span>跨域受限，下载时仍会依次试</span>';
+      } else {
+        routeHtml = '<span class="pill bad">线路都不通</span><span>稍后重新测速</span>';
+      }
+      routeHtml += '<span class="lk" id="reprobe">重新测速</span>';
+    } else if (state.probe && state.probe.error) {
+      routeHtml = '<span class="pill bad">测速失败</span><span>' + esc(state.probe.error) + '</span>';
+    }
+
+    var filters = [
+      ['all', '全部'], ['win', 'Windows'], ['mac', 'macOS'], ['linux', 'Linux']
+    ].map(function (f) {
+      return '<div class="tg ' + (state.filter === f[0] ? 'on' : '') + '" data-filter="' + f[0] + '">' + f[1] + '</div>';
+    }).join('');
+
+    var html =
+      '<div class="wrap">' +
+      (state.open ? (
+        '<div class="card">' +
+          '<div class="hd">' +
+            '<div class="t">Release 下载助手</div>' +
+            '<div class="repo">' + esc(state.repo) + (state.tag ? ' · ' + esc(state.tag) : '') + '</div>' +
+            '<button class="x" id="close">×</button>' +
+          '</div>' +
+          '<div class="bar">' + filters +
+            '<span class="cnt">' + picked.length + '/' + state.assets.length + ' 已选</span>' +
+          '</div>' +
+          body +
+          '<div class="ft">' +
+            '<div class="rt">' + routeHtml + '</div>' +
+            '<button class="go" id="go"' + (picked.length ? '' : ' disabled') + '>下载 ' + picked.length + ' 个文件' +
+              (pickedSize ? '（' + fmtSize(pickedSize) + '）' : '') + '</button>' +
+            '<div class="tip">保存到「下载/GitHub/仓库/版本」，可在扩展设置里关掉归档</div>' +
+          '</div>' +
+        '</div>'
+      ) : (
+        '<div class="fab" id="fab">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="#FFF3DC" stroke-width="2.6" stroke-linecap="square">' +
+            '<path d="M12 3v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 19h16"/>' +
+          '</svg>' +
+          '<span class="dot">' + (state.assets.length || '') + '</span>' +
+        '</div>'
+      )) +
+      '</div>';
+
+    root.innerHTML = '<style>' + CSS + '</style>' + html;
+    wire(root);
+  }
+
+  function wire(root) {
+    var fab = root.getElementById('fab');
+    if (fab) fab.addEventListener('click', function () { state.open = true; render(); if (!state.assets.length && !state.loading) loadAssets(); else if (!state.probe) probeBest(); });
+
+    var close = root.getElementById('close');
+    if (close) close.addEventListener('click', function () { state.open = false; render(); });
+
+    root.querySelectorAll('[data-filter]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        state.filter = el.getAttribute('data-filter');
+        render();
+      });
+    });
+
+    root.querySelectorAll('.row').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var name = el.getAttribute('data-name');
+        state.picked[name] = !state.picked[name];
+        render();
+      });
+    });
+
+    var reprobe = root.getElementById('reprobe');
+    if (reprobe) reprobe.addEventListener('click', function () { probeBest(); });
+
+    var go = root.getElementById('go');
+    if (go) go.addEventListener('click', async function () {
+      var list = pickedAssets();
+      if (!list.length) return;
+      go.disabled = true;
+      go.textContent = '正在加入下载队列…';
+      var settings = await getSettings();
+      var items = list.map(function (a) {
+        return {
+          url: a.url,
+          asset: a.name,
+          size: a.size,
+          owner: state.owner,
+          repo: state.repo.split('/')[1],
+          tag: state.tag,
+          path: buildPath({ owner: state.owner, repo: state.repo.split('/')[1], tag: state.tag, asset: a.name }, settings)
+        };
+      });
+      var res = await bgSend('enqueue', { items: items });
+      if (res && res.error) {
+        go.textContent = '加入失败：' + res.error;
+        return;
+      }
+      var extra = res.blocked ? '（' + res.blocked + ' 个已在队列）' : '';
+      go.textContent = '已加入 ' + res.added + ' 个，去看浏览器下载列表 ' + extra;
+      state.open = false;
+      setTimeout(render, 1200);
+    });
+  }
+
+  function mount() {
+    if (!detect()) {
+      if (state.host) state.host.style.display = 'none';
+      return;
+    }
+    if (state.host && document.documentElement.contains(state.host)) {
+      render();
+      return;
+    }
+    state.host = document.createElement('div');
+    state.host.id = 'ghdl-host';
+    state.host.attachShadow({ mode: 'open' });
+    document.documentElement.appendChild(state.host);
+    state.assets = [];
+    state.probe = null;
+    render();
+  }
+
+  try {
+    EXT.runtime.onMessage.addListener(function (msg) {
+      if (msg && msg.type === 'open-panel') {
+        state.open = true;
+        render();
+        if (!state.assets.length) loadAssets();
+      }
+    });
+  } catch (e) {}
+
+  ['turbo:load', 'pjax:end'].forEach(function (ev) {
+    document.addEventListener(ev, function () { setTimeout(mount, 300); });
+  });
+
+  var lastPath = location.pathname;
+  setInterval(function () {
+    if (location.pathname !== lastPath) {
+      lastPath = location.pathname;
+      mount();
+    }
+  }, 1000);
+
+  mount();
+})();

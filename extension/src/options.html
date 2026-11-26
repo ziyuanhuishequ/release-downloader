@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GitHub Release 下载助手 · 设置</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<div class="page">
+  <header class="hd">
+    <img src="../icons/icon128.png" alt="" class="logo">
+    <div>
+      <h1>GitHub Release 下载助手</h1>
+      <p class="sub">v<span id="ver"></span> · 全部在浏览器里运行，不联网上传任何数据</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>下载</h2>
+    <label class="line">
+      <input type="checkbox" id="subfolder">
+      <span>
+        <b>按仓库和版本归档</b>
+        <i>文件存到「下载/GitHub/仓库名/版本号/文件名」，关掉就都堆在下载目录</i>
+      </span>
+    </label>
+    <div class="preview">保存路径示例：<code id="pathPreview">GitHub/sharkdp/bat/v0.24.0/bat-v0.24.0-x86_64-pc-windows-msvc.zip</code></div>
+
+    <label class="line">
+      <span class="lab">同时下载</span>
+      <select id="concurrency">
+        <option value="1">1 个文件</option>
+        <option value="2">2 个文件</option>
+        <option value="3">3 个文件</option>
+        <option value="4">4 个文件</option>
+      </select>
+      <i>同时下几个文件。网速一般时 2 个最稳</i>
+    </label>
+
+    <label class="line">
+      <input type="checkbox" id="autoProbe">
+      <span>
+        <b>下载前自动测速选线</b>
+        <i>并发试拉每条镜像 256KB，挑最快的那条；关掉就按上次结果或直连</i>
+      </span>
+    </label>
+
+    <label class="line">
+      <span class="lab">失败换线重试</span>
+      <select id="maxRetries">
+        <option value="2">2 次</option>
+        <option value="4">4 次（推荐）</option>
+        <option value="6">6 次</option>
+        <option value="8">8 次</option>
+      </select>
+      <i>下载中断时自动换下一条线路，用完还没成功才报失败</i>
+    </label>
+
+    <label class="line">
+      <input type="checkbox" id="notify">
+      <span>
+        <b>下载完成后弹系统通知</b>
+        <i>一批文件全部交给浏览器下载后提醒一次</i>
+      </span>
+    </label>
+  </section>
+
+  <section class="card">
+    <h2>GitHub Token <span class="opt">可选</span></h2>
+    <p class="note">
+      不填也能用，但 GitHub 匿名接口每小时只有 60 次，扫描多了会返回 403。
+      填一个只读的 Personal Access Token（<code>public_repo</code> 或无任何勾选即可）能提到 5000 次/小时，
+      也能读到你自己的私有仓库。
+    </p>
+    <input type="password" id="token" placeholder="ghp_... 或 github_pat_...（只保存在本机浏览器）" spellcheck="false">
+    <p class="note tiny">Token 存在 chrome.storage.local，不会上传到任何服务器。</p>
+  </section>
+
+  <section class="card">
+    <h2>线路 <span class="opt">高级</span></h2>
+    <p class="note">
+      内置 20 条镜像，一行一条可以追加自己的。格式 <code>名称|https://前缀/</code>，只写前缀也行。
+      不在内置列表里的域名需要额外授权，保存时会弹窗询问。
+    </p>
+    <textarea id="extraRoutes" rows="5" spellcheck="false" placeholder="我的线路|https://gh.example.com/"></textarea>
+    <div class="row">
+      <button id="btnSaveRoutes" class="btn small">保存线路</button>
+      <span id="routeInfo" class="note tiny"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>安装到其他浏览器</h2>
+    <ul class="list">
+      <li><b>Chrome / Edge / Brave / 360 / QQ 浏览器</b>：打开 <code>chrome://extensions</code>（Edge 是 <code>edge://extensions</code>），
+        打开右上角「开发者模式」，点「加载已解压的扩展程序」，选解压出来的文件夹。</li>
+      <li><b>Firefox</b>：地址栏输入 <code>about:debugging#/runtime/this-firefox</code>，
+        点「临时载入附加组件」，选中文件夹里的 <code>manifest.json</code>。</li>
+      <li>换电脑时把文件夹拷过去，重复上面步骤即可，不需要安装包。</li>
+    </ul>
+  </section>
+
+  <footer class="foot">
+    <button id="btnSave" class="btn">保存设置</button>
+    <button id="btnReset" class="btn ghost">恢复默认</button>
+    <span id="saved" class="ok"></span>
+    <a class="repo" href="https://github.com/ziyuanhuishequ/release-downloader" target="_blank" rel="noreferrer">项目主页</a>
+  </footer>
+</div>
+<script src="common.js"></script>
+<script src="options.js"></script>
+</body>
+</html>
