@@ -15,12 +15,12 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.5";
+const APP_VERSION: &str = "1.6.6";
 /// 检测更新要查的仓库
 const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
 /// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
 const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.5";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.6";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -179,6 +179,59 @@ fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
 }
 
+/// 缓存/统计数据的存放目录。
+///
+/// 刻意**不放在 exe 同目录**：用户把 exe 放桌面或下载文件夹时，旁边冒出
+/// `routes.pool.json`、`routes.stats.json` 会让人以为中招了。这里统一收进系统的
+/// 用户数据目录（Windows 是 `%LOCALAPPDATA%\GitHubReleaseDownloader`，
+/// 其它平台是 `$XDG_CACHE_HOME/github-release-downloader`），
+/// 用户平时看不到，卸载时删掉这个目录即可。
+fn state_dir() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|p| p.join("GitHubReleaseDownloader"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .map(|p| p.join("github-release-downloader"))
+    };
+    // 极端情况下（环境变量缺失）退到临时目录，总之不落回 exe 同目录
+    let dir = base.unwrap_or_else(|| std::env::temp_dir().join("GitHubReleaseDownloader"));
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// 老版本把缓存写在 exe 同目录。升级后把它们挪进用户数据目录，
+/// 并把 exe 旁边那份清掉，用户那边就再也看不到这些文件了。
+fn migrate_legacy_cache() {
+    let (Some(new_dir), Some(old_dir)) = (state_dir(), exe_dir()) else { return };
+    if old_dir == new_dir {
+        return;
+    }
+    for name in [POOL_FILE, STATS_FILE] {
+        let old = old_dir.join(name);
+        if !old.is_file() {
+            continue;
+        }
+        let new = new_dir.join(name);
+        if new.exists() {
+            let _ = std::fs::remove_file(&old);
+            continue;
+        }
+        if std::fs::rename(&old, &new).is_ok() {
+            continue;
+        }
+        // 跨盘符 rename 会失败：退化成本地读出来再写过去
+        if let Ok(body) = std::fs::read(&old) {
+            if std::fs::write(&new, body).is_ok() {
+                let _ = std::fs::remove_file(&old);
+            }
+        }
+    }
+}
+
 fn src_cn(s: &str) -> &'static str {
     match s {
         "remote" => "直连拉取",
@@ -226,7 +279,7 @@ fn parse_pool(v: &Value) -> Vec<(String, String)> {
 }
 
 fn load_pool_cache() -> Option<PoolInfo> {
-    let dir = exe_dir()?;
+    let dir = state_dir()?;
     let text = std::fs::read_to_string(dir.join(POOL_FILE)).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     let routes = parse_pool(&v);
@@ -243,7 +296,7 @@ fn load_pool_cache() -> Option<PoolInfo> {
 }
 
 fn write_pool_cache(info: &PoolInfo) {
-    let Some(dir) = exe_dir() else { return };
+    let Some(dir) = state_dir() else { return };
     let routes: Vec<Value> = info
         .routes
         .iter()
@@ -336,7 +389,7 @@ fn stats() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, R
 
 fn load_stats() -> std::collections::HashMap<String, RouteStat> {
     let mut out = std::collections::HashMap::new();
-    let Some(dir) = exe_dir() else { return out };
+    let Some(dir) = state_dir() else { return out };
     let Ok(text) = std::fs::read_to_string(dir.join(STATS_FILE)) else {
         return out;
     };
@@ -359,7 +412,7 @@ fn load_stats() -> std::collections::HashMap<String, RouteStat> {
 }
 
 fn save_stats(map: &std::collections::HashMap<String, RouteStat>) {
-    let Some(dir) = exe_dir() else { return };
+    let Some(dir) = state_dir() else { return };
     let mut obj = serde_json::Map::new();
     for (k, s) in map {
         obj.insert(
@@ -5074,6 +5127,8 @@ fn bench_download(args: &[String]) {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    // 老版本把 routes.pool.json / routes.stats.json 写在 exe 旁边，先挪走再干净启动
+    migrate_legacy_cache();
     if args.iter().any(|a| a == "--selftest") {
         selftest();
         return Ok(());

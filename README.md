@@ -8,13 +8,13 @@
 
 | 用途 | 文件 |
 | --- | --- |
-| Windows 桌面版（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.5.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.5.exe) |
+| Windows 桌面版（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.6.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.6.exe) |
 | Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip) |
 | Firefox | [`GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip) |
 
-
-上面四个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
-点文件名即可直接下载。扩展的每个历史版本另有单独 Release（如
+上面三个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
+点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.6.zip`（Rust 源码）。
+扩展的每个历史版本另有单独 Release（如
 [ext-v1.2.1](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.2.1)）。
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
@@ -68,7 +68,7 @@
 
 ## 使用
 
-1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.5.exe`，双击运行，无需安装
+1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.6.exe`，双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -212,8 +212,12 @@ url=https://github.com/.../PowerToysUserSetup-0.85.1-x64.exe
 ## 线路池：远端可更新，内置 20 条兜底
 
 线路优先来自仓库根目录的 [`routes.json`](routes.json)：程序启动后异步拉取（12 小时内只拉一次），
-拉不到就依次退到 `exe 同目录/routes.pool.json` 缓存、最后退到 `ROUTE_LIST` 内置表——
+拉不到就依次退到本地缓存（`%LOCALAPPDATA%\GitHubReleaseDownloader\routes.pool.json`）、最后退到 `ROUTE_LIST` 内置表——
 所以镜像站集体换域名时，只改 `routes.json` 并推一次，所有用户下次启动就自动用上新线路，不用发版本。
+
+缓存和线路健康度统计写在 `%LOCALAPPDATA%\GitHubReleaseDownloader\`（`routes.pool.json`、`routes.stats.json`），
+**不会出现在 exe 旁边**——桌面和下载文件夹保持干净；老版本散落在 exe 同目录的那两个文件，
+启动时会自动挪进去并删掉原文件。
 
 `routes.json` 格式（`prefix` 必须以 `/` 结尾，空串表示直连）：
 
