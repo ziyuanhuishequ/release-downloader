@@ -19,7 +19,11 @@ Thumbs.db
 /_selftest_out/
 
 # 扩展：打包产物、签名私钥、测试用浏览器配置
-/*-浏览器扩展-v*.zip
+/*-Ext-v*.zip
+/_rel.json
+/_patch.json
+/_zipchk/
+/_cprof*
 /浏览器扩展/
 /extension.pem
 /extension.crx

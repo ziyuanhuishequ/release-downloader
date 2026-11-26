@@ -4,8 +4,10 @@
 
 用法：python build.py
 产物（输出到仓库根目录）：
-  GitHub下载整理工具-浏览器扩展-v1.0.0-chrome.zip    Chrome / Edge / Brave / 360 / QQ
-  GitHub下载整理工具-浏览器扩展-v1.0.0-firefox.zip   Firefox
+  GitHub-Release-Downloader-Ext-v1.0.0-chrome.zip    Chrome / Edge / Brave / 360 / QQ
+  GitHub-Release-Downloader-Ext-v1.0.0-firefox.zip   Firefox
+
+注意：文件名保持 ASCII，GitHub Release 上传时中文名会被转义成乱码。
 """
 import json
 import os
@@ -15,7 +17,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 VER = json.load(open(os.path.join(HERE, "manifest.json"), encoding="utf-8"))["version"]
-NAME = f"GitHub下载整理工具-浏览器扩展-v{VER}"
+NAME = f"GitHub-Release-Downloader-Ext-v{VER}"
 
 SKIP_DIRS = {"screenshots", "__pycache__", "node_modules", ".git"}
 SKIP_FILES = {"build.py", "make_icons.py", "README.md", ".DS_Store"}

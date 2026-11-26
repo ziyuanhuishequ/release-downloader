@@ -65,7 +65,7 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub下载整理工具-浏览器扩展-v1.0.0-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.0.0-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
 
 用法、设置、与桌面版的差别见 [extension/README.md](extension/README.md)。

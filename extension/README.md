@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub下载整理工具-浏览器扩展-v1.0.0-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.0.0-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `...-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.0.0-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -106,7 +106,8 @@ cd extension
 python build.py
 ```
 
-产物在仓库根目录：`...-chrome.zip`、`...-firefox.zip`，以及解压好的 `浏览器扩展/` 目录。
+产物在仓库根目录：`GitHub-Release-Downloader-Ext-v<版本>-chrome.zip` 与 `-firefox.zip`，
+以及解压好的 `浏览器扩展/` 目录（可直接「加载已解压的扩展程序」）。
 `build.py` 会按 `manifest.json` 的 `version` 命名，改版本号只改这一处。
 
 ## 与桌面版的差别
