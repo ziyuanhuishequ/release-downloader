@@ -25,6 +25,9 @@ Thumbs.db
 /GitHub-Release-Downloader-Desktop-v*.exe
 /GitHub-Release-Downloader-Source-v*.zip
 /_dl_check.*
+/_dl_chk/
+/_body_*.md
+/routes.pool.json
 /_zipchk/
 /_zipchk2/
 /_cprof*
