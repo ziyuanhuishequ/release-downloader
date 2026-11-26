@@ -503,7 +503,9 @@ async function switchRoute(task, prefix, auto) {
   task.downloadId = 0;
   task.segmented = false;
   if (task.blobUrl) { revokeBlob(task.blobUrl); task.blobUrl = ''; }
-  task.status = 'queued';
+  // 暂停中的任务换线路：保持暂停，等用户点「继续」再在新线路上重新开始
+  var wasPaused = task.status === 'paused';
+  task.status = wasPaused ? 'paused' : 'queued';
   task.routeIdx = idx;
   task.received = 0;
   task.speed = 0;
