@@ -4,6 +4,23 @@
 
 ![主界面](screenshots/main.png)
 
+## 下载
+
+| 用途 | 文件 |
+| --- | --- |
+| Windows 桌面版（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.5.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.5.exe) |
+| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip) |
+| Firefox | [`GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip) |
+| 源码（Rust，含编译说明） | [`GitHub-Release-Downloader-Source-v1.6.5.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Source-v1.6.5.zip) |
+
+上面四个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
+点文件名即可直接下载。扩展的每个历史版本另有单独 Release（如
+[ext-v1.2.1](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.2.1)）。
+
+**装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
+（Edge 是 `edge://extensions`）→ 右上角开启「开发者模式」→「加载已解压的扩展程序」→ 选解压出来的文件夹。
+扩展是「加载已解压」安装，**不会自动更新**：换新版后覆盖解压，再到扩展页点「重新加载」。
+
 ## 它解决什么问题
 
 想收集某个软件的全平台安装包，官方 Release 页要一一下载，文件名还混在一起；下几个仓库就更乱。这个工具把「扫描 → 勾选 → 批量下载 → 自动分文件夹」串成一步。
@@ -51,8 +68,7 @@
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.5.exe`，双击运行，无需安装
-   （同一页还有浏览器扩展版和 v1.6.5 源码包）
+1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.5.exe`，双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
