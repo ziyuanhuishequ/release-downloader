@@ -22,6 +22,9 @@ Thumbs.db
 /*-Ext-v*.zip
 /_rel.json
 /_patch.json
+/GitHub-Release-Downloader-Desktop-v*.exe
+/GitHub-Release-Downloader-Source-v*.zip
+/_dl_check.*
 /_zipchk/
 /_cprof*
 /浏览器扩展/

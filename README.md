@@ -49,7 +49,8 @@
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载最新的 exe（如 `GitHub-Release-Downloader-v1.6.3.exe`），双击运行，无需安装
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.3.exe`，双击运行，无需安装
+   （同一页还有浏览器扩展版和 v1.6.3 源码包）
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
