@@ -31,6 +31,7 @@
     <button class="tg" data-filter="win">Windows</button>
     <button class="tg" data-filter="mac">macOS</button>
     <button class="tg" data-filter="linux">Linux</button>
+    <button class="tg new" id="btnOnlyNew" title="只显示还没下载过的文件">只看未下载</button>
     <button class="tg link" id="btnAll">全选</button>
   </div>
 
@@ -41,7 +42,18 @@
     </div>
   </main>
 
+  <div class="promo">
+    <span class="pz">✦</span>
+    <span class="pt">
+      <b id="promoTitle">本软件由 AI 工具免费制作</b>
+      <i id="promoDesc">每日可领 5000 积分，同款工具自己也能做</i>
+    </span>
+    <button class="pl" id="lnkPromo">领取积分</button>
+    <a class="pl ghost" id="lnkMore" href="#">更多 →</a>
+  </div>
+
   <footer class="ft">
+    <div id="rlist" class="rlist hide"></div>
     <div class="route" id="route">
       <span class="pill wait">未测速</span>
       <span class="rt-txt">下载前会自动挑最快的线路</span>
@@ -50,6 +62,7 @@
     <button class="go" id="btnGo" disabled>选择文件后下载</button>
     <div class="bottom">
       <span id="queue">队列空闲</span>
+      <span id="dlCount"></span>
       <a href="#" id="lnkHelp">怎么安装到别的浏览器？</a>
     </div>
   </footer>

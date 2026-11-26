@@ -11,6 +11,37 @@ var probeCache = null;       // {key, ts, list}
 var segTasks = new Map();    // taskId -> task，正在分片下载的
 var settingsCache = null;    // 事件回调里不反复读 storage
 
+/* 下载历史：url -> {ts, size}，用来在列表里把「已下载」标出来。
+ * 只存在本机 storage.local，不上传任何地方；超过 400 条丢最旧的。 */
+var dlHist = null;
+var histVer = 0;
+var HIST_MAX = 400;
+
+async function loadHist() {
+  if (dlHist) return dlHist;
+  try {
+    dlHist = (await EXT.storage.local.get('dlHist')).dlHist || {};
+  } catch (e) {
+    dlHist = {};
+  }
+  return dlHist;
+}
+
+function markDownloaded(task) {
+  loadHist().then(function (h) {
+    if (!h || typeof h !== 'object') return;
+    h[task.url] = { ts: Date.now(), size: task.total || task.size || 0, name: task.name };
+    var keys = Object.keys(h);
+    if (keys.length > HIST_MAX) {
+      keys.sort(function (a, b) { return (h[a].ts || 0) - (h[b].ts || 0); })
+        .slice(0, keys.length - HIST_MAX)
+        .forEach(function (k) { delete h[k]; });
+    }
+    histVer++;
+    try { EXT.storage.local.set({ dlHist: h }); } catch (e) {}
+  });
+}
+
 var SLOW_JUDGE_MS = 9000;    // 速度一直上不去，持续这么久就标记「慢」
 var AUTO_SWITCH_MS = 16000;  // 而且几乎没下多少，就自动换一条线重来
 
@@ -105,6 +136,63 @@ async function listAssets(repo, tag) {
   return { repo: out.repo, release: rel, releases: out.releases.map(function (r) { return { tag: r.tag, name: r.name, prerelease: r.prerelease }; }) };
 }
 
+/* ---------------- 线路池 + 线路健康度 ---------------- */
+
+var routeStats = null;        // prefix -> {ok, fail, sumBps, last}
+var statsDirty = false;
+
+async function loadStats() {
+  if (routeStats) return routeStats;
+  try {
+    routeStats = (await EXT.storage.local.get('routeStats')).routeStats || {};
+  } catch (e) {
+    routeStats = {};
+  }
+  return routeStats;
+}
+
+function saveStats() {
+  if (!statsDirty) return;
+  statsDirty = false;
+  try { EXT.storage.local.set({ routeStats: routeStats || {} }); } catch (e) {}
+}
+
+/* 成功：记速度，慢速会自然把分数拉下来；失败：记次数，连着失败就冷却一段时间 */
+function noteRoute(prefix, ok, bps) {
+  if (prefix === undefined) return;
+  loadStats().then(function (s) {
+    var e = s[prefix] || { ok: 0, fail: 0, sumBps: 0 };
+    if (ok) {
+      e.ok++;
+      e.sumBps += Math.max(0, bps || 0);
+      e.failStreak = 0;
+      badUntil.delete(prefix);
+    } else {
+      e.fail++;
+      e.failStreak = (e.failStreak || 0) + 1;
+      // 连挂两次就先别用它，10 分钟后再给机会（比原来 3 分钟更容易筛掉死线路）
+      if (e.failStreak >= 2) {
+        var ms = Math.min(30 * 60 * 1000, 5 * 60 * 1000 * Math.pow(2, e.failStreak - 2));
+        badUntil.set(prefix, Date.now() + ms);
+      }
+    }
+    e.last = Date.now();
+    s[prefix] = e;
+    statsDirty = true;
+    setTimeout(saveStats, 1500);
+  });
+}
+
+async function refreshPool(force) {
+  var r = await loadRoutePool(force);
+  if (r && r.pool) probeCache = null;   // 线路变了，旧的测速结果作废
+  return {
+    info: POOL_INFO,
+    from: r && r.from,
+    count: POOL_INFO ? POOL_INFO.count : 0
+  };
+}
+
 /* ---------------- 线路测速 ---------------- */
 
 function cacheKeyOf(url) {
@@ -172,6 +260,11 @@ async function probeRoutes(probeUrl, cacheKey, force) {
   });
   var okCount = list.filter(function (r) { return r.ok; }).length;
   var blocked = list.filter(function (r) { return !r.ok && r.err === 'cors'; }).length;
+  // 测速结果顺手记进线路健康度：跨文件复用，下次没测速也知道该先试哪条
+  list.forEach(function (r) {
+    if (r.ok) noteRoute(r.prefix, true, r.bps);
+    else if (r.err !== 'cors') noteRoute(r.prefix, false, 0);   // 跨域受限不代表线路差，不扣分
+  });
   var out = { key: key, ts: Date.now(), list: list, probeUrl: probeUrl, okCount: okCount, blocked: blocked };
   probeCache = out;
   try { await EXT.storage.local.set({ routeCache: out }); } catch (e) {}
@@ -205,13 +298,20 @@ async function routesForFile(url, settings) {
   all.forEach(function (r) {
     if (!order.some(function (x) { return x.prefix === r.prefix; })) order.push(r);
   });
+  // 没有本次测速数据的线路，按历史健康度排（下过 500KB/s 的线路自然排前面）
+  if (!probed || !probed.list || !probed.list.length) {
+    var stats = await loadStats();
+    order = sortByScore(order, stats);
+  }
   var now = Date.now();
   var fresh = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) < now; });
-  var list = fresh.length ? fresh : order;
-  // 手动指定的线路优先
-  if (settings && settings.preferRoute) {
+  var cooling = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) >= now; });
+  var list = fresh.concat(cooling);   // 冷却中的排最后，全都在冷却时也还能兜底
+  // 手动指定的线路优先（'@direct' 代表直连）
+  var want = prefPrefix(settings && settings.preferRoute);
+  if (want !== null) {
     var pi = -1;
-    list.forEach(function (r, i) { if (r.prefix === settings.preferRoute) pi = i; });
+    list.forEach(function (r, i) { if (r.prefix === want) pi = i; });
     if (pi > 0) {
       var pick = list.splice(pi, 1)[0];
       list.unshift(pick);
@@ -318,6 +418,7 @@ function sampleSpeed(task, received) {
  * 分片下载则把慢掉的分片重连，已经下好的部分不丢。
  * 触发条件跟桌面版一致：掉到本次峰值 45% 以下、连着两次、间隔 25 秒、最多 5 次。 */
 function maybeBoost(task) {
+  if (task.status !== 'downloading') return false;   // 暂停/排队时别乱重连
   var total = task.total || task.size || 0;
   if (!total) return false;
   if ((task.boostCount || 0) >= 5) return false;
@@ -358,6 +459,7 @@ function maybeBoost(task) {
 
 /* 慢速判定：连续 SLOW_JUDGE_MS 低于阈值就把任务标成 slow，界面据此提示换线路 */
 function judgeSlow(task) {
+  if (task.status !== 'downloading') return;         // 暂停时速度本来就是 0，别误判成慢
   var s = settingsCache || DEFAULT_SETTINGS;
   var th = Math.max(5, s.lowSpeedKB || 40) * 1024;
   var total = task.total || task.size || 0;
@@ -432,6 +534,125 @@ function cancelTask(task) {
   task.error = '已取消';
   task.speed = 0;
   finishOne();
+}
+
+/* ---------------- 暂停 / 继续 ----------------
+ * 分片下载：掐断在飞连接，chunks 全留着，继续时只补剩余区间（真正的暂停续传）。
+ * 单连接：交给 downloads.pause/resume，浏览器自己保住已下的字节。
+ * 还没轮到（排队/选线中）的直接挂起，pump 就不会取它。
+ */
+async function pauseTask(task) {
+  if (!task) return { ok: false, error: '任务不存在' };
+  if (task.status === 'paused') return { ok: true };
+  if (task.status === 'queued' || task.status === 'probing') {
+    task.status = 'paused';
+    task.speed = 0;
+    task.boosting = false;
+    persist(); updateBadge(); pump();
+    return { ok: true };
+  }
+  if (task.status !== 'downloading') return { ok: false, error: '这个任务已经结束' };
+
+  if (task.segmented) {
+    segSend({ type: 'seg-pause', id: task.id });
+    task.status = 'paused';
+    task.speed = 0;
+    task.boosting = false;
+    task.slow = false;
+    task.slowSince = 0;
+    task._sp = null;
+    persist(); updateBadge(); pump();
+    return { ok: true };
+  }
+
+  var id = task.downloadId;
+  if (!id) {
+    // downloads.download() 是异步的：刚点下载的那几百毫秒里还没有 downloadId。
+    // 先记下「想暂停」，连接一建好马上停，别让用户看到「没有可暂停的连接」。
+    task.pauseWanted = true;
+    task.status = 'paused';
+    task.speed = 0;
+    task.boosting = false;
+    task.slow = false;
+    persist(); updateBadge(); pump();
+    return { ok: true, deferred: true };
+  }
+  return new Promise(function (resolve) {
+    try {
+      EXT.downloads.pause(id, function () {
+        var le = EXT.runtime.lastError;
+        if (le) {
+          resolve({ ok: false, error: '这条线路不支持暂停，可以「换线路」或「取消」后重来' });
+          return;
+        }
+        task.status = 'paused';
+        task.speed = 0;
+        task.boosting = false;
+        task.slow = false;
+        task.slowSince = 0;
+        task._sp = null;
+        persist(); updateBadge(); pump();
+        resolve({ ok: true });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: (e && e.message) || String(e) });
+    }
+  });
+}
+
+async function resumeTask(task) {
+  if (!task) return { ok: false, error: '任务不存在' };
+  if (task.status !== 'paused') return { ok: false, error: '这个任务没有暂停' };
+
+  if (task.segmented) {
+    task.status = 'downloading';
+    task.speed = 0;
+    task.slow = false;
+    task.slowSince = 0;
+    task._sp = null;
+    segSend({ type: 'seg-resume', id: task.id });
+    persist(); updateBadge();
+    return { ok: true };
+  }
+
+  if (task.downloadId) {
+    return new Promise(function (resolve) {
+      try {
+        EXT.downloads.resume(task.downloadId, function () {
+          var le = EXT.runtime.lastError;
+          if (le) {
+            // 连接已经被浏览器回收，只能重新排一次
+            task.status = 'queued';
+            task.downloadId = 0;
+            task.received = 0;
+            task.speed = 0;
+            task.error = '';
+            persist(); pump();
+            resolve({ ok: true, requeued: true });
+            return;
+          }
+          task.status = 'downloading';
+          task.speed = 0;
+          task.slow = false;
+          task.slowSince = 0;
+          task._sp = null;
+          persist(); updateBadge();
+          resolve({ ok: true });
+        });
+      } catch (e) {
+        resolve({ ok: false, error: (e && e.message) || String(e) });
+      }
+    });
+  }
+
+  // 后台被回收过，下载对象已经不在：重新排队，从头要（浏览器那边的临时文件可能也没了）
+  task.status = 'queued';
+  task.received = 0;
+  task.speed = 0;
+  task.segmented = false;
+  task.error = '';
+  persist(); pump();
+  return { ok: true, requeued: true };
 }
 
 /* ---------------- 分片下载（多线程） ---------------- */
@@ -560,6 +781,7 @@ function onSegError(m) {
   segTasks.delete(m.id);
   task.segmented = false;
   task.segFailed = true;           // 镜像不支持 Range 之类，退回单连接
+  noteRoute(task.routePrefix, false, 0);
   task.status = 'queued';
   task.received = 0;
   task.speed = 0;
@@ -574,7 +796,8 @@ async function enqueue(items) {
   items.forEach(function (it) {
     if (!it || !it.url) return;
     var dup = tasks.some(function (t) {
-      return t.url === it.url && (t.status === 'queued' || t.status === 'downloading' || t.status === 'probing');
+      return t.url === it.url && (t.status === 'queued' || t.status === 'downloading' ||
+        t.status === 'probing' || t.status === 'paused');
     });
     if (dup) return;
     var p = parseAssetUrl(it.url) || {};
@@ -629,8 +852,11 @@ async function startTask(task, settings) {
   try {
     var order = await routesForFile(task.url, settings);
     if (!order.length) throw new Error('没有可用线路');
+    // 选线期间用户可能点了暂停/取消：别把它又拽回「下载中」
+    if (task.status !== 'probing') { updateBadge(); pump(); return; }
     var route = order[task.routeIdx % order.length];
     var check = settings.autoProbe ? await preflight(route, task.url) : { ok: true };
+    if (task.status !== 'probing') { updateBadge(); pump(); return; }
     if (!check.ok) {
       task.error = '线路 ' + route.name + '：' + (check.code === 'html' ? '返回网页而非文件' : check.code);
       task.routeIdx++;
@@ -665,6 +891,11 @@ async function startTask(task, settings) {
     var segCap = (settings.segMaxMB || 128) * 1024 * 1024;
     if (settings.segEnabled !== false && !task.segFailed && size > 1024 * 1024 && size <= segCap) {
       if (await startSegmented(task, route, settings, order)) {
+        if (task.pauseWanted) {
+          task.pauseWanted = false;
+          task.status = 'downloading';
+          pauseTask(task);
+        }
         updateBadge();
         return;
       }
@@ -677,6 +908,12 @@ async function startTask(task, settings) {
     });
     task.downloadId = id;
     activeIds.set(id, task);
+    // 下载按钮点下后、连接建好前用户就点了暂停：这里补上
+    if (task.pauseWanted) {
+      task.pauseWanted = false;
+      task.status = 'downloading';
+      pauseTask(task);
+    }
     updateBadge();
     persist();
   } catch (e) {
@@ -700,6 +937,31 @@ function finishOne() {
   pump();
 }
 
+/* 单连接下载的进度兜底：onChanged 的 bytesReceived 在部分环境（含无头 Chrome）
+ * 给得很稀甚至不给，光靠事件会出现「进度一直 0、结束时突然 100%」。
+ * 这里每隔一会儿用 downloads.search 主动同步一次，一次调用覆盖所有在下的任务。 */
+function syncProgress() {
+  if (!activeIds.size) return;
+  try {
+    EXT.downloads.search({ state: 'in_progress' }, function (list) {
+      void EXT.runtime.lastError;
+      (list || []).forEach(function (d) {
+        var task = activeIds.get(d.id);
+        if (!task || task.status !== 'downloading') return;
+        if (d.totalBytes > 0) {
+          task.total = d.totalBytes;
+          if (!task.size) task.size = d.totalBytes;
+        }
+        if (typeof d.bytesReceived === 'number' && d.bytesReceived !== task.received) {
+          task.received = d.bytesReceived;
+          sampleSpeed(task, task.received);
+        }
+      });
+    });
+  } catch (e) {}
+}
+setInterval(syncProgress, 1200);
+
 function handleChange(delta) {
   var task = activeIds.get(delta.id);
   if (!task) return;
@@ -715,16 +977,28 @@ function handleChange(delta) {
     activeIds.delete(delta.id);
     task.status = 'done';
     task.received = task.total || task.size;
+    noteRoute(task.routePrefix, true, task.bestSpeed || 0);
     task.speed = 0;
     task.slow = false;
     task.downloadId = 0;
     if (task.blobUrl) { revokeBlob(task.blobUrl); task.blobUrl = ''; }
+    markDownloaded(task);          // 记进历史，列表里这一行显示「已下载」
     doneSince++;
     finishOne();
     return;
   }
   if (delta.state && delta.state.current === 'interrupted') {
     var err = (delta.error && delta.error.current) || 'NETWORK_FAILED';
+    // 用户点暂停时 Chrome 也会报 interrupted(USER_PAUSED)：保留映射，继续时还要用同一个 id
+    if (err === 'USER_PAUSED') {
+      task.status = 'paused';
+      task.speed = 0;
+      task.slow = false;
+      task._sp = null;
+      persist();
+      updateBadge();
+      return;
+    }
     activeIds.delete(delta.id);
     var settingsP = getSettings();
     settingsP.then(function (settings) {
@@ -745,7 +1019,10 @@ function handleChange(delta) {
       try { EXT.downloads.erase({ id: delta.id }, function () { void EXT.runtime.lastError; }); } catch (e) {}
       task.tries++;
       // 把刚才这条线路冷却 3 分钟，下次从下一条开始
-      if (task.routePrefix !== undefined) badUntil.set(task.routePrefix, Date.now() + 3 * 60 * 1000);
+      if (task.routePrefix !== undefined) {
+        badUntil.set(task.routePrefix, Date.now() + 3 * 60 * 1000);
+        noteRoute(task.routePrefix, false, 0);
+      }
       task.routeIdx = (task.routeIdx || 0) + 1;
       if (task.tries >= (settings.maxRetries || 4)) {
         task.status = 'failed';
@@ -782,27 +1059,77 @@ onMessage(function (msg, sender, respond) {
           break;
         case 'routes': {
           var s = await getSettings();
-          respond({ routes: allRoutes(s), cached: probeCache || (await EXT.storage.local.get('routeCache')).routeCache || null });
+          var stats0 = await loadStats();
+          var now0 = Date.now();
+          respond({
+            routes: allRoutes(s).map(function (r) {
+              var e = stats0[r.prefix] || {};
+              return {
+                name: r.name,
+                prefix: r.prefix,
+                ok: e.ok || 0,
+                fail: e.fail || 0,
+                score: Math.round(routeScore(stats0, r.prefix)),
+                cooling: (badUntil.get(r.prefix) || 0) > now0
+              };
+            }),
+            pool: POOL_INFO,
+            prefer: s.preferRoute || '',
+            cached: probeCache || (await EXT.storage.local.get('routeCache')).routeCache || null
+          });
+          break;
+        }
+        case 'refresh-pool': {
+          var rp = await refreshPool(msg.force !== false);
+          respond(rp);
           break;
         }
         case 'enqueue':
           respond(await enqueue(msg.items || []));
           break;
         case 'state':
+          syncProgress();       // 打开界面时顺手刷一次单连接进度
           respond({
             tasks: tasks.slice(-50).map(function (t) {
               return {
-                id: t.id, name: t.name, path: t.path, size: t.size, received: t.received,
+                id: t.id, name: t.name, path: t.path, url: t.url, size: t.size, received: t.received,
                 total: t.total, status: t.status, route: t.route, error: t.error,
                 speed: t.speed || 0, slow: !!t.slow, segmented: !!t.segmented,
                 boosting: !!t.boosting, boostCount: t.boostCount || 0,
+                paused: t.status === 'paused',
                 routePrefix: t.routePrefix || ''
               };
             }),
+            histVer: histVer,
             pending: pendingCount(),
             probe: probeCache ? { ts: probeCache.ts, list: probeCache.list.slice(0, 6) } : null
           });
           break;
+        case 'history': {
+          var hh = await loadHist();
+          var sub = {};
+          (msg.urls || []).forEach(function (u) {
+            if (u && hh[u]) sub[u] = hh[u].ts || 0;
+          });
+          respond({ hist: sub, ver: histVer, total: Object.keys(hh).length });
+          break;
+        }
+        case 'clear-history':
+          dlHist = {};
+          histVer++;
+          try { await EXT.storage.local.set({ dlHist: {} }); } catch (e) {}
+          respond({ ok: true });
+          break;
+        case 'pause-task': {
+          var pt = tasks.filter(function (x) { return x.id === msg.id; })[0];
+          respond(await pauseTask(pt));
+          break;
+        }
+        case 'resume-task': {
+          var rt = tasks.filter(function (x) { return x.id === msg.id; })[0];
+          respond(await resumeTask(rt));
+          break;
+        }
         case 'switch-route': {
           var st = tasks.filter(function (x) { return x.id === msg.id; })[0];
           respond({ ok: await switchRoute(st, msg.prefix || '', false) });
@@ -829,7 +1156,7 @@ onMessage(function (msg, sender, respond) {
         case 'cancel-all':
           tasks.forEach(function (t) {
             if (t.status === 'queued' || t.status === 'probing') { t.status = 'canceled'; t.error = '已取消'; }
-            if (t.status === 'downloading') {
+            if (t.status === 'downloading' || t.status === 'paused') {
               if (t.segmented) abortSeg(t);
               if (t.downloadId) {
                 try { EXT.downloads.cancel(t.downloadId, function () { void EXT.runtime.lastError; }); } catch (e) {}
@@ -845,6 +1172,15 @@ onMessage(function (msg, sender, respond) {
         case 'open-options':
           try { EXT.runtime.openOptionsPage(); } catch (e) {}
           respond({ ok: true });
+          break;
+        case 'open-url':
+          // 内容脚本在页面里够不着 tabs API，跳转统一走后台
+          try {
+            if (msg.url) EXT.tabs.create({ url: msg.url });
+            respond({ ok: true });
+          } catch (e) {
+            respond({ error: String(e && e.message || e) });
+          }
           break;
         case 'notify':
           notifyDone(msg.title || 'GitHub Release 下载助手', msg.message || '');
@@ -912,7 +1248,9 @@ try {
     if (got && Array.isArray(got.tasks) && got.tasks.length) {
       tasks = got.tasks;
       tasks.forEach(function (t) {
-        if (t.status === 'downloading' || t.status === 'probing') {
+        // 暂停的任务也一起重排：downloadId 已经跟 Service Worker 一起丢了，
+        // 留着 paused 状态用户点「继续」也只能从头来，不如直接接着下。
+        if (t.status === 'downloading' || t.status === 'probing' || t.status === 'paused') {
           t.status = 'queued';
           t.downloadId = 0;
         }
@@ -921,6 +1259,12 @@ try {
       pump();
     }
   } catch (e) {}
+})();
+
+/* 启动时把线路池刷一遍（走缓存，12 小时内不重复请求），顺手恢复线路健康度 */
+(async function boot() {
+  try { await loadStats(); } catch (e) {}
+  try { await refreshPool(false); } catch (e) {}
 })();
 
 updateBadge();

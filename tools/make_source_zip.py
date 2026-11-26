@@ -27,6 +27,7 @@ INCLUDE_FILES = [
     "LICENSE",
     ".gitignore",
     "routes.example.txt",
+    "routes.json",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/build.rs",

@@ -20,8 +20,9 @@
   效果等同于手动点「停止」再「开始」，通常 1~3 秒恢复且速度翻几倍（全程最多 5 次，间隔 ≥ 25 秒）
 - **断点续传**：中断后分片保留，下次启动在列表上方提示「有 N 个文件没下完」，一键接着下
 - **实时总速度**：底部进度条下方显示所有任务加起来的速度，掉到 0 会变红提示
-- **20 条加速线路 + 自定义**：内置 20 条镜像并行测速，自动挑最快的；exe 同目录放 `routes.txt`
-  即可追加自己的线路，镜像换域名不用等更新
+- **动态线路池**：内置 20 条镜像，启动后从仓库拉 `routes.json`（12 小时一次，拉不到就用本地缓存/内置表），
+  新增或下线镜像只改这个文件，用户端不用更新软件；点「20 条线路」标签可展开看每条线路的实测速度与历史成功率，
+  点任意一条即可固定使用；exe 同目录放 `routes.txt` 还能再加自己的私有线路
 - **504 快速换线**：网关超时/5xx 立刻换下一条线路并拉黑，不再在死线路上反复重试 3 次；
   整轮网络类失败会等 2 秒自动重试一次
 - **Token 支持**：未登录 GitHub API 每小时限 60 次，填 Token 可提升额度
@@ -50,8 +51,8 @@
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.4.exe`，双击运行，无需安装
-   （同一页还有浏览器扩展版和 v1.6.4 源码包）
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.5.exe`，双击运行，无需安装
+   （同一页还有浏览器扩展版和 v1.6.5 源码包）
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -67,11 +68,13 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub-Release-Downloader-Ext-v1.1.0-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.2.0-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
 
-扩展 v1.1.0 起也支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
-慢速自动「暂停→继续」、手动换线路，以及设置页里的「检测更新」。
+扩展 v1.2.0 起支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
+慢速自动「暂停→继续」、手动换线路；每个任务都能暂停/继续（分片任务保留已下数据，接着下不重来）；
+文件列表用「未下载 / 下载中 / 已暂停 / 已下载」四种角标区分，还能一键「只看未下载」；
+线路面板可展开看全部线路的实测速度与健康度，点一下固定使用；设置页同样有「检测更新」和线路池更新。
 
 用法、设置、与桌面版的差别见 [extension/README.md](extension/README.md)。
 
@@ -190,10 +193,28 @@ url=https://github.com/.../PowerToysUserSetup-0.85.1-x64.exe
 
 设计上有一条约定：取消或分片失败时**不删除分片**；只有服务器不支持 Range 时才清理，因为要整体回退单连接。
 
-## 线路表：内置 20 条，也可以自己补
+## 线路池：远端可更新，内置 20 条兜底
 
-`ROUTE_LIST`（`main.rs` 顶部）内置 20 条，含直连与各家 GitHub 加速镜像。免费镜像经常整站挂掉或开始限流，
-所以宁可多放备胎：测速只有真拉到数据的才排到前面，挂掉的自动沉底，不影响正常下载。
+线路优先来自仓库根目录的 [`routes.json`](routes.json)：程序启动后异步拉取（12 小时内只拉一次），
+拉不到就依次退到 `exe 同目录/routes.pool.json` 缓存、最后退到 `ROUTE_LIST` 内置表——
+所以镜像站集体换域名时，只改 `routes.json` 并推一次，所有用户下次启动就自动用上新线路，不用发版本。
+
+`routes.json` 格式（`prefix` 必须以 `/` 结尾，空串表示直连）：
+
+```json
+{
+  "version": 1,
+  "updated": "2026-11-26",
+  "routes": [
+    { "name": "直连", "prefix": "" },
+    { "name": "gh-proxy.com", "prefix": "https://gh-proxy.com/" }
+  ]
+}
+```
+
+界面右上角「20 条线路」点开可看每条的实测速度与历史成功率（跨文件累计），点一条即可固定使用。
+免费镜像经常整站挂掉或开始限流，所以宁可多放备胎：测速只有真拉到数据的才排到前面，挂掉的自动沉底，
+不影响正常下载。
 
 想再加线路不用改代码——`routes.txt` 放到 exe 同目录，一行一条：
 
@@ -216,7 +237,8 @@ https://another.example.com/
 ```bash
 release-organizer.exe --dl <url> <size> <保存目录> [文件名]   # 不启动界面，只下载单个 URL
 release-organizer.exe --pending <保存目录>                   # 列出未完成的下载
-release-organizer.exe --routes                               # 打印生效的线路表（含 routes.txt）
+release-organizer.exe --routes                               # 打印生效的线路表（含线路池与 routes.txt）
+release-organizer.exe --pool                                 # 强制更新一次线路池并打印结果
 release-organizer.exe --fontcheck                            # 字体加载自检
 release-organizer.exe --pick                                 # 目录选择对话框自检
 release-organizer.exe --selftest                             # 内置自测

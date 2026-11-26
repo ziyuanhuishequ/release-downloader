@@ -63,6 +63,12 @@
         <i>一批文件全部交给浏览器下载后提醒一次</i>
       </span>
     </label>
+
+    <div class="row" style="margin-top:12px">
+      <button id="btnClearHist" class="btn small ghost">清除「已下载」标记</button>
+      <span id="histInfo" class="note tiny"></span>
+    </div>
+    <p class="note tiny">列表里下过的文件会标「已下载」并默认不再勾选，记录只存在本机，清掉不影响已下载的文件。</p>
   </section>
 
   <section class="card">
@@ -122,14 +128,25 @@
   </section>
 
   <section class="card">
-    <h2>线路 <span class="opt">高级</span></h2>
+    <h2>线路池 <span class="opt">可动态更新</span></h2>
     <p class="note">
-      内置 20 条镜像，一行一条可以追加自己的。格式 <code>名称|https://前缀/</code>，只写前缀也行。
-      不在内置列表里的域名需要额外授权，保存时会弹窗询问。
+      线路池是仓库里的 <code>routes.json</code>，扩展每 12 小时自动拉一次：官方加线路、下线失效镜像，这边不用换版本就能跟上。
+      下载前会并发测速，按实测速度 + 历史成功率挑最稳的那条；连挂两次的线路自动冷却。
     </p>
-    <textarea id="extraRoutes" rows="5" spellcheck="false" placeholder="我的线路|https://gh.example.com/"></textarea>
+    <div class="row" style="margin-top:0;flex-wrap:wrap">
+      <button id="btnPool" class="btn small">更新线路池</button>
+      <span id="poolInfo" class="note tiny">读取中…</span>
+      <span id="prefInfo" class="note tiny"></span>
+    </div>
+    <div id="routeList" class="rlist"></div>
+    <p class="note tiny">点线路名字可以固定使用它（星标），再点一次恢复自动挑选。</p>
+
+    <p class="note" style="margin-top:14px">
+      也可以自己加线路：一行一条，格式 <code>名称|https://前缀/</code>，只写前缀也行。不在池子里的域名保存时会弹窗询问授权。
+    </p>
+    <textarea id="extraRoutes" rows="4" spellcheck="false" placeholder="我的线路|https://gh.example.com/"></textarea>
     <div class="row">
-      <button id="btnSaveRoutes" class="btn small">保存线路</button>
+      <button id="btnSaveRoutes" class="btn small">保存自定义线路</button>
       <span id="routeInfo" class="note tiny"></span>
     </div>
   </section>
@@ -156,6 +173,15 @@
       <span id="updInfo" class="note tiny"></span>
     </div>
     <p class="note tiny">扩展是「加载已解压」方式装的，检测到新版后下载压缩包，解压覆盖原文件夹，再到扩展管理页点一次「重新加载」即可；桌面版 exe 也在同一个 Release 页。</p>
+  </section>
+
+  <section class="card">
+    <h2>更多 <span class="opt">免费</span></h2>
+    <p class="note" id="promoNote">本软件由 AI 工具免费制作，每日可领 5000 积分，同款工具你自己也能做。</p>
+    <div class="row" style="margin-top:0">
+      <a class="btn small" id="lnkPromo" href="https://loomy.cgref.cn/qinxi" target="_blank" rel="noreferrer">领取积分</a>
+      <a class="btn small ghost" id="lnkMore" href="https://sucaizy.com" target="_blank" rel="noreferrer">更多黑科技内容 →</a>
+    </div>
   </section>
 
   <footer class="foot">

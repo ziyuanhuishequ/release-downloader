@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "updated": "2026-11-26",
+  "note": "线路池：桌面版和浏览器扩展都会在 12 小时内自动拉取这份文件。新增或下线线路只改这里，用户端不用更新版本。prefix 必须以 / 结尾，空字符串表示直连。",
+  "routes": [
+    {
+      "name": "直连",
+      "prefix": ""
+    },
+    {
+      "name": "gh-proxy.com",
+      "prefix": "https://gh-proxy.com/"
+    },
+    {
+      "name": "ghproxy.net",
+      "prefix": "https://ghproxy.net/"
+    },
+    {
+      "name": "ghfast.top",
+      "prefix": "https://ghfast.top/"
+    },
+    {
+      "name": "gh-proxy.org",
+      "prefix": "https://gh-proxy.org/"
+    },
+    {
+      "name": "moeyy",
+      "prefix": "https://github.moeyy.xyz/"
+    },
+    {
+      "name": "ghproxy.cc",
+      "prefix": "https://ghproxy.cc/"
+    },
+    {
+      "name": "gh.llkk.cc",
+      "prefix": "https://gh.llkk.cc/"
+    },
+    {
+      "name": "gitmirror",
+      "prefix": "https://hub.gitmirror.com/"
+    },
+    {
+      "name": "cors.isteed",
+      "prefix": "https://cors.isteed.cc/"
+    },
+    {
+      "name": "gh-proxy.net",
+      "prefix": "https://gh-proxy.net/"
+    },
+    {
+      "name": "ghproxy.cfd",
+      "prefix": "https://ghproxy.cfd/"
+    },
+    {
+      "name": "ghproxy.homeboyc",
+      "prefix": "https://ghproxy.homeboyc.cn/"
+    },
+    {
+      "name": "gh.xxooo.cf",
+      "prefix": "https://gh.xxooo.cf/"
+    },
+    {
+      "name": "gitproxy.click",
+      "prefix": "https://gitproxy.click/"
+    },
+    {
+      "name": "ghp.ci",
+      "prefix": "https://ghp.ci/"
+    },
+    {
+      "name": "ghfile.geek",
+      "prefix": "https://ghfile.geekbang.fun/"
+    },
+    {
+      "name": "gh.api.99988866",
+      "prefix": "https://gh.api.99988866.xyz/"
+    },
+    {
+      "name": "gh.ddlc.top",
+      "prefix": "https://gh.ddlc.top/"
+    },
+    {
+      "name": "ghproxy.markxu",
+      "prefix": "https://ghproxy.markxu.icu/"
+    }
+  ]
+}

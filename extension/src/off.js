@@ -80,8 +80,16 @@
       id: job.id,
       received: job.received,
       total: job.total,
-      speed: job.speed || 0
+      speed: job.speed || 0,
+      paused: !!job.paused
     });
+  }
+
+  /* 用户点了暂停：所有在飞的连接已经被 abort，这里原地挂着等继续，
+   * 已经下好的 chunks 一个字节都不丢（暂停 ≠ 重来）。 */
+  function waitResume(job) {
+    if (!job.paused) return Promise.resolve();
+    return new Promise(function (resolve) { job.waiters.push(resolve); });
   }
 
   async function fetchPart(job, part) {
@@ -89,6 +97,7 @@
     // 没下完就继续：被「提速」打断时按剩余范围重新要，已经下好的不丢
     while (part.got < need) {
       if (job.aborted) return;
+      if (job.paused) { await waitResume(job); continue; }
       part.stalled = false;
       var once = new AbortController();
       var onAbort = function () { try { once.abort(); } catch (e) {} };
@@ -193,10 +202,34 @@
       var job = {
         id: msg.id, url: urls[0], urls: urls, size: msg.size || 0, threads: msg.threads || 4,
         ctrl: new AbortController(), received: 0, total: 0, speed: 0,
-        lastT: 0, lastB: 0, aborted: false, aborts: []
+        lastT: 0, lastB: 0, aborted: false, aborts: [],
+        paused: false, waiters: []
       };
       jobs.set(msg.id, job);
       run(job);
+    } else if (msg.type === 'seg-pause') {
+      // 暂停：掐断在飞的连接，保留 parts/chunks，等 seg-resume 接着要剩余区间
+      var pj = jobs.get(msg.id);
+      if (pj && !pj.paused) {
+        pj.paused = true;
+        pj.aborts.slice().forEach(function (fn) { try { fn(); } catch (e) {} });
+        pj.speed = 0;
+        pj.lastT = 0;
+        post({
+          type: 'seg-progress', id: pj.id, received: pj.received, total: pj.total,
+          speed: 0, paused: true
+        });
+      }
+    } else if (msg.type === 'seg-resume') {
+      var rj = jobs.get(msg.id);
+      if (rj && rj.paused) {
+        rj.paused = false;
+        rj.lastT = 0;
+        rj.lastB = rj.received;
+        var ws = rj.waiters;
+        rj.waiters = [];
+        ws.forEach(function (fn) { try { fn(); } catch (e) {} });
+      }
     } else if (msg.type === 'seg-boost') {
       // 自动提速：把所有在飞的分片断掉，按剩余范围重新连（已下的部分保留）
       var bj = jobs.get(msg.id);
@@ -209,6 +242,9 @@
       if (j) {
         j.aborted = true;
         try { j.ctrl.abort(); } catch (e) {}
+        var w = j.waiters;          // 暂停中又被取消：把等待中的分片叫醒，让它们自己退出
+        j.waiters = [];
+        w.forEach(function (fn) { try { fn(); } catch (e) {} });
         jobs.delete(msg.id);
       }
     } else if (msg.type === 'seg-revoke') {

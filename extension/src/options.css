@@ -94,3 +94,27 @@ textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; f
 .foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .ok { color: #087458; font-size: 12.5px; font-weight: 700; }
 .repo { margin-left: auto; font-size: 12px; color: var(--text2); }
+
+/* 线路池列表 */
+.rlist { border: 2px solid var(--ink); background: #fff; max-height: 300px; overflow: auto; margin-top: 10px; }
+.rlist.hide { display: none; }
+.rline {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 9px; font-size: 12.5px; border-bottom: 1px dashed #E6DCC6; cursor: pointer;
+}
+.rline:last-child { border-bottom: none; }
+.rline:hover { background: #FFF7E6; }
+.rline .rn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rline .rs { color: var(--text2); white-space: nowrap; font-size: 12px; }
+.rline .rk { font-size: 10.5px; color: var(--text2); white-space: nowrap; }
+.rline.ok .rs { color: #087458; font-weight: 700; }
+.rline.bad { opacity: .6; }
+.rline.bad .rs { color: #782814; }
+.rline.pref { background: #FFF1DE; }
+.rline.rhead {
+  background: var(--soft); font-weight: 700; color: var(--text2);
+  cursor: default; position: sticky; top: 0;
+}
+.rline .bar2 { width: 90px; height: 8px; border: 2px solid var(--ink); background: #fff; flex: none; }
+.rline .bar2 i { display: block; height: 100%; background: var(--mint); }
+.pool-tip { font-size: 12px; color: var(--text2); }

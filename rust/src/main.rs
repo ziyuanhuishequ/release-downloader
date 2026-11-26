@@ -15,12 +15,12 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.4";
+const APP_VERSION: &str = "1.6.5";
 /// 检测更新要查的仓库
 const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
 /// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
 const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.3";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.5";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -74,12 +74,19 @@ const ROUTE_LIST: &[(&str, &str)] = &[
     ("ghproxy.markxu", "https://ghproxy.markxu.icu/"),
 ];
 
-/// 内置线路 + 用户自定义线路（exe 同目录的 routes.txt）
+/// 生效线路 = 线路池（远程 routes.json，拉不到用内置）+ 用户自定义 routes.txt
 fn all_routes() -> Vec<(String, String)> {
-    let mut v: Vec<(String, String)> = ROUTE_LIST
-        .iter()
-        .map(|(n, p)| (n.to_string(), p.to_string()))
-        .collect();
+    let mut v: Vec<(String, String)> = {
+        let p = pool();
+        if p.routes.is_empty() {
+            ROUTE_LIST
+                .iter()
+                .map(|(n, x)| (n.to_string(), x.to_string()))
+                .collect()
+        } else {
+            p.routes.clone()
+        }
+    };
     for (n, p) in load_custom_routes() {
         if !v.iter().any(|(_, x)| x == &p) {
             v.push((n, p));
@@ -126,6 +133,287 @@ fn load_custom_routes() -> Vec<(String, String)> {
     out
 }
 
+// ---------------------------------------------------------------- 线路池（动态更新）
+//
+// 线路池放在仓库的 routes.json 里：加线、下线失效镜像都改那个文件，客户端 12 小时内
+// 自动拉一次，界面上也能手动「更新线路池」。拉不到就用内置表，下载不会因此不可用。
+
+const POOL_URL: &str = "https://raw.githubusercontent.com/ziyuanhuishequ/release-downloader/main/routes.json";
+/// 线路池/健康度的缓存，都放在 exe 同目录
+const POOL_FILE: &str = "routes.pool.json";
+const STATS_FILE: &str = "routes.stats.json";
+const POOL_TTL_SECS: u64 = 12 * 3600;
+
+/// 拉线路池时可用的通道：直连优先，不通就借已有的镜像去取 raw 文件
+const POOL_TRY: &[&str] = &[
+    "",
+    "https://gh-proxy.com/",
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+    "https://gh.llkk.cc/",
+];
+
+#[derive(Clone, Default)]
+struct PoolInfo {
+    ver: u32,
+    updated: String,
+    fetched: u64,
+    source: String, // builtin / cache / remote / mirror
+    routes: Vec<(String, String)>,
+}
+
+static POOL: std::sync::OnceLock<Mutex<PoolInfo>> = std::sync::OnceLock::new();
+
+fn pool() -> std::sync::MutexGuard<'static, PoolInfo> {
+    POOL.get_or_init(|| Mutex::new(PoolInfo::default())).lock().unwrap()
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
+}
+
+fn src_cn(s: &str) -> &'static str {
+    match s {
+        "remote" => "直连拉取",
+        "mirror" => "镜像拉取",
+        "cache" => "本地缓存",
+        "builtin" | "" => "内置表",
+        _ => "未知来源",
+    }
+}
+
+/// 解析 routes.json：prefix 必须以 / 结尾，空串表示直连
+fn parse_pool(v: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(arr) = v.get("routes").and_then(|r| r.as_array()) else {
+        return out;
+    };
+    for item in arr {
+        let prefix = item.get("prefix").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        if !prefix.is_empty()
+            && !(prefix.starts_with("http://") || prefix.starts_with("https://"))
+        {
+            continue;
+        }
+        if !prefix.is_empty() && !prefix.ends_with('/') {
+            continue;
+        }
+        let name = item
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if prefix.is_empty() {
+                    "直连".to_string()
+                } else {
+                    prefix.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/').to_string()
+                }
+            });
+        if out.iter().any(|(_, p): &(String, String)| p == &prefix) {
+            continue;
+        }
+        out.push((name, prefix));
+    }
+    out
+}
+
+fn load_pool_cache() -> Option<PoolInfo> {
+    let dir = exe_dir()?;
+    let text = std::fs::read_to_string(dir.join(POOL_FILE)).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let routes = parse_pool(&v);
+    if routes.is_empty() {
+        return None;
+    }
+    Some(PoolInfo {
+        ver: v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        updated: v.get("updated").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        fetched: v.get("fetched").and_then(|x| x.as_u64()).unwrap_or(0),
+        source: "cache".into(),
+        routes,
+    })
+}
+
+fn write_pool_cache(info: &PoolInfo) {
+    let Some(dir) = exe_dir() else { return };
+    let routes: Vec<Value> = info
+        .routes
+        .iter()
+        .map(|(n, p)| serde_json::json!({ "name": n, "prefix": p }))
+        .collect();
+    let body = serde_json::json!({
+        "version": info.ver,
+        "updated": info.updated,
+        "fetched": info.fetched,
+        "routes": routes,
+    });
+    let _ = std::fs::write(
+        dir.join(POOL_FILE),
+        serde_json::to_string_pretty(&body).unwrap_or_default(),
+    );
+}
+
+/// 拉一次线路池。force=false 且缓存还新鲜时直接用缓存，不发请求。
+fn refresh_pool(force: bool) -> PoolInfo {
+    let cached = load_pool_cache();
+    if !force {
+        if let Some(c) = &cached {
+            if now_secs().saturating_sub(c.fetched) < POOL_TTL_SECS {
+                let mut p = pool();
+                *p = c.clone();
+                p.source = "cache".into();
+                return p.clone();
+            }
+        }
+    }
+    for pre in POOL_TRY {
+        let url = format!("{}{}", pre, POOL_URL);
+        let ag = agent(9);
+        let Ok(resp) = ag.get(&url).call() else { continue };
+        let Ok(v) = resp.into_json::<Value>() else { continue };
+        let routes = parse_pool(&v);
+        if routes.is_empty() {
+            continue;
+        }
+        let info = PoolInfo {
+            ver: v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            updated: v.get("updated").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            fetched: now_secs(),
+            source: if pre.is_empty() { "remote".into() } else { "mirror".into() },
+            routes,
+        };
+        write_pool_cache(&info);
+        *pool() = info.clone();
+        return info;
+    }
+    // 拉不到：退到上次缓存，再不行就用内置表
+    if let Some(mut c) = cached {
+        c.source = "cache".into();
+        *pool() = c.clone();
+        return c;
+    }
+    let p = pool();
+    PoolInfo {
+        ver: p.ver,
+        updated: p.updated.clone(),
+        fetched: p.fetched,
+        source: "builtin".into(),
+        routes: p.routes.clone(),
+    }
+}
+
+// ---------------------------------------------------------------- 线路健康度
+//
+// 跨天、跨文件累计：某条线路下过 1.5MB/s 就一直是「好线路」，连挂两次先冷却。
+// 没有本次测速数据时（比如刚启动就点下载），按这份历史排序挑线。
+
+#[derive(Clone, Default)]
+struct RouteStat {
+    ok: u32,
+    fail: u32,
+    sum: f64,
+    last: u64,
+    streak: u32,
+}
+
+static STATS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, RouteStat>>> =
+    std::sync::OnceLock::new();
+
+fn stats() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, RouteStat>> {
+    STATS
+        .get_or_init(|| Mutex::new(load_stats()))
+        .lock()
+        .unwrap()
+}
+
+fn load_stats() -> std::collections::HashMap<String, RouteStat> {
+    let mut out = std::collections::HashMap::new();
+    let Some(dir) = exe_dir() else { return out };
+    let Ok(text) = std::fs::read_to_string(dir.join(STATS_FILE)) else {
+        return out;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return out };
+    if let Some(obj) = v.as_object() {
+        for (k, s) in obj {
+            out.insert(
+                k.clone(),
+                RouteStat {
+                    ok: s.get("ok").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                    fail: s.get("fail").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                    sum: s.get("sum").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                    last: s.get("last").and_then(|x| x.as_u64()).unwrap_or(0),
+                    streak: s.get("streak").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                },
+            );
+        }
+    }
+    out
+}
+
+fn save_stats(map: &std::collections::HashMap<String, RouteStat>) {
+    let Some(dir) = exe_dir() else { return };
+    let mut obj = serde_json::Map::new();
+    for (k, s) in map {
+        obj.insert(
+            k.clone(),
+            serde_json::json!({ "ok": s.ok, "fail": s.fail, "sum": s.sum, "last": s.last, "streak": s.streak }),
+        );
+    }
+    let _ = std::fs::write(
+        dir.join(STATS_FILE),
+        serde_json::to_string_pretty(&Value::Object(obj)).unwrap_or_default(),
+    );
+}
+
+/// 记一次线路表现：成功记速度，失败记次数；连挂两次进入冷却（指数退避，最多 30 分钟）
+fn note_route(prefix: &str, ok: bool, bps: f64) {
+    let mut m = stats();
+    let e = m.entry(prefix.to_string()).or_default();
+    if ok {
+        e.ok += 1;
+        e.sum += bps.max(0.0);
+        e.streak = 0;
+    } else {
+        e.fail += 1;
+        e.streak += 1;
+    }
+    e.last = now_secs();
+    let snapshot = m.clone();
+    drop(m);
+    save_stats(&snapshot);
+}
+
+/// 速度 × 成功率；没有历史数据返回 -1（排在有数据的后面）
+fn route_score(prefix: &str) -> f64 {
+    let m = stats();
+    let Some(s) = m.get(prefix) else { return -1.0 };
+    let uses = s.ok + s.fail;
+    if uses == 0 {
+        return -1.0;
+    }
+    let speed = if s.ok > 0 { s.sum / s.ok as f64 } else { 0.0 };
+    let rate = s.ok as f64 / uses as f64;
+    speed * (0.25 + 0.75 * rate)
+}
+
+fn route_cooling(prefix: &str) -> bool {
+    let m = stats();
+    let Some(s) = m.get(prefix) else { return false };
+    if s.streak < 2 {
+        return false;
+    }
+    let backoff = 300u64 * 2u64.pow(s.streak.min(6) - 2);
+    now_secs().saturating_sub(s.last) < backoff.min(1800)
+}
+
 // ---------------------------------------------------------------- 数据
 
 #[derive(Clone)]
@@ -170,6 +458,8 @@ struct FileProg {
 enum Msg {
     Scan(Vec<Row>, Vec<String>),
     Routes(Vec<Route>),
+    /// 线路池更新完成：(条数, 来源, 版本, 更新时间, 错误)
+    Pool(Result<(usize, String, u32, String), String>),
 }
 
 // ---------------------------------------------------------------- 分类与命名
@@ -577,7 +867,7 @@ fn probe_one(name: &str, prefix: &str, url: &str) -> Route {
 }
 
 fn probe_routes(url: &str) -> Vec<Route> {
-    // 内置线路 + 用户自定义线路，一条一个线程并行测
+    // 线路池 + 用户自定义线路，一条一个线程并行测
     let list = all_routes();
     let (tx, rx) = channel::<(usize, Route)>();
     for (i, (name, prefix)) in list.iter().enumerate() {
@@ -621,6 +911,13 @@ fn probe_routes(url: &str) -> Vec<Route> {
             })
         })
         .collect()
+}
+
+/// 测完一轮就把结果记进健康度：好线路下次不用测也排在前面
+fn remember_probe(list: &[Route]) {
+    for r in list {
+        note_route(&r.prefix, r.ok, r.speed);
+    }
 }
 
 // ---------------------------------------------------------------- 下载
@@ -1799,6 +2096,13 @@ struct App {
 
     status: String,
     show_routes: bool,
+    /// 线路面板里手动点亮的线路前缀（None = 自动挑最快的）
+    prefer: Option<String>,
+    /// 正在后台更新线路池 / 上一次更新的结果提示
+    pool_busy: bool,
+    pool_msg: String,
+    /// 首帧把本地缓存顶上，过期才联网
+    pool_boot: bool,
     pending_download: bool,
     icon_tex: Option<egui::TextureHandle>,
     /// 顶栏 GitHub 小图标
@@ -1907,6 +2211,10 @@ impl App {
             job_reported: true,
             status,
             show_routes: false,
+            prefer: None,
+            pool_busy: false,
+            pool_msg: String::new(),
+            pool_boot: false,
             pending_download: false,
             icon_tex,
             gh_tex,
@@ -1984,12 +2292,29 @@ impl App {
         });
     }
 
+    /// 后台拉一次线路池（force=true 无视 12 小时缓存），结果通过 Msg::Pool 回来
+    fn update_pool(&mut self, ctx: &egui::Context) {
+        if self.pool_busy {
+            return;
+        }
+        self.pool_busy = true;
+        self.pool_msg = "正在更新线路池…".into();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let info = refresh_pool(true);
+            let res = if info.routes.is_empty() {
+                Err("拉取失败，可能网络不通".to_string())
+            } else {
+                Ok((info.routes.len(), info.source.clone(), info.ver, info.updated.clone()))
+            };
+            let _ = tx.send(Msg::Pool(res));
+            ctx.request_repaint();
+        });
+    }
+
     fn route_pairs(&self) -> Vec<(String, String)> {
         let mut list: Vec<Route> = self.routes.iter().filter(|r| r.ok).cloned().collect();
-        if list.is_empty() {
-            // 一条都没测通：把全部线路按原顺序交给下载流程去扫
-            return all_routes();
-        }
         list.sort_by(|a, b| {
             b.speed
                 .partial_cmp(&a.speed)
@@ -1997,6 +2322,30 @@ impl App {
         });
         let mut pairs: Vec<(String, String)> =
             list.into_iter().map(|r| (r.name, r.prefix)).collect();
+        // 本次没测到的线路照样留在队里：没测速数据时按历史健康度排，
+        // 测过速的排前面、其余按历史分数垫后（某个镜像只是这一下超时，不该整轮丢掉）
+        let mut rest: Vec<(String, String)> = all_routes()
+            .into_iter()
+            .filter(|(_, p)| !pairs.iter().any(|(_, x)| x == p))
+            .collect();
+        rest.sort_by(|a, b| {
+            route_score(&b.1)
+                .partial_cmp(&route_score(&a.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        pairs.extend(rest);
+        // 用户在线路面板里点亮的线路排最前；它挂了也会自动落到下一条
+        if let Some(pref) = &self.prefer {
+            if let Some(i) = pairs.iter().position(|(_, p)| p == pref) {
+                let one = pairs.remove(i);
+                pairs.insert(0, one);
+            }
+        }
+        // 冷却中的线路沉底：全在冷却时才轮到它们兜底
+        let (cooling, hot): (Vec<_>, Vec<_>) =
+            pairs.into_iter().partition(|(_, p)| route_cooling(p));
+        let mut pairs = hot;
+        pairs.extend(cooling);
         // 兜底：镜像全挂时直连是最后一根稻草。测速只读 1MB，那一下超时
         // 不代表整包下不动，所以直连永远留在队尾再试一次。
         if !pairs.iter().any(|(_, p)| p.is_empty()) {
@@ -2964,6 +3313,49 @@ fn fetch_latest_desktop() -> Result<(String, String), String> {
         .ok_or_else(|| "没找到桌面版 Release".to_string())
 }
 
+/// 可点击的线路标签：线路面板里点一下固定使用，再点取消
+fn pill_click(
+    ui: &mut egui::Ui,
+    text: &str,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    on: bool,
+) -> egui::Response {
+    let font = px(13.0);
+    let tw = ui.fonts(|f| {
+        f.layout_no_wrap(text.to_owned(), font.clone(), fg)
+            .size()
+            .x
+    });
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(tw + 18.0, 26.0), egui::Sense::click());
+    let hovered = resp.hovered();
+    let fill = if on {
+        egui::Color32::from_rgb(255, 236, 190)
+    } else if hovered {
+        egui::Color32::from_rgb(255, 247, 230)
+    } else {
+        bg
+    };
+    let p = ui.painter();
+    p.rect(
+        rect,
+        egui::Rounding::same(0.0),
+        fill,
+        egui::Stroke::new(if on { 3.0 } else { 2.0 }, INK),
+    );
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        font,
+        if on { INK } else { fg },
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 fn chip(
     ui: &mut egui::Ui,
     text: &str,
@@ -3376,6 +3768,21 @@ impl eframe::App for App {
             self.start_update_check(ctx);
         }
 
+        // 线路池：先把本地缓存顶上（秒开，不联网），缓存过期再后台拉一次
+        if !self.pool_boot {
+            self.pool_boot = true;
+            if let Some(c) = load_pool_cache() {
+                *pool() = c;
+            }
+            let stale = {
+                let p = pool();
+                p.routes.is_empty() || now_secs().saturating_sub(p.fetched) > POOL_TTL_SECS
+            };
+            if stale {
+                self.update_pool(ctx);
+            }
+        }
+
         // 检测更新的后台结果
         if let Some(rx) = &self.upd_rx {
             if let Ok(res) = rx.try_recv() {
@@ -3427,6 +3834,7 @@ impl eframe::App for App {
                 }
                 Msg::Routes(routes) => {
                     self.probing = false;
+                    remember_probe(&routes);
                     let best = routes
                         .iter()
                         .filter(|r| r.ok)
@@ -3445,6 +3853,18 @@ impl eframe::App for App {
                         self.pending_download = false;
                         start_after_probe = true;
                     }
+                }
+                Msg::Pool(res) => {
+                    self.pool_busy = false;
+                    self.pool_msg = match res {
+                        Ok((n, src, ver, upd)) => {
+                            // 线路池变了，上一轮的测速结果就不再对应当前线路
+                            self.routes.clear();
+                            format!("线路池已更新：{} 条（{} · v{} · {}）", n, src_cn(&src), ver, upd)
+                        }
+                        Err(e) => format!("线路池更新失败：{}（继续用现有线路）", e),
+                    };
+                    self.status = self.pool_msg.clone();
                 }
             }
         }
@@ -3768,6 +4188,35 @@ impl eframe::App for App {
 
         // ---------------- 线路详情（可折叠）
         if self.show_routes {
+            let display: Vec<Route> = if self.routes.is_empty() {
+                all_routes()
+                    .into_iter()
+                    .map(|(n, p)| Route {
+                        name: n,
+                        prefix: p,
+                        speed: 0.0,
+                        ok: false,
+                    })
+                    .collect()
+            } else {
+                self.routes.clone()
+            };
+            let pool_line = {
+                let p = pool();
+                if p.routes.is_empty() {
+                    "内置线路表".to_string()
+                } else {
+                    format!(
+                        "线路池 v{} · {} 条 · {}",
+                        p.ver,
+                        p.routes.len(),
+                        if p.updated.is_empty() { "未知日期" } else { &p.updated }
+                    )
+                }
+            };
+            let mut clicked: Option<String> = None;
+            let mut do_update = false;
+
             egui::TopBottomPanel::bottom("routes")
                 .frame(
                     egui::Frame::none()
@@ -3786,37 +4235,85 @@ impl eframe::App for App {
                     );
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("加速线路实测速度")
+                            egui::RichText::new("加速线路")
                                 .font(px(15.0))
                                 .color(INK),
                         );
                         ui.add_space(6.0);
                         ui.label(
-                            egui::RichText::new("下载时按此顺序优先使用，失败自动切换")
-                                .font(pr(13.0))
+                            egui::RichText::new("自动测速择优，失败自动切换；点线路可固定使用")
+                                .font(pr(12.5))
                                 .color(TEXT2),
+                        );
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if self.pool_busy {
+                                    ui.label(
+                                        egui::RichText::new("更新中…")
+                                            .font(pr(12.5))
+                                            .color(TEXT2),
+                                    );
+                                } else if pixel_button(
+                                    ui,
+                                    "更新线路池",
+                                    112.0,
+                                    30.0,
+                                    BtnKind::Ghost,
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    do_update = true;
+                                }
+                                ui.add_space(10.0);
+                                ui.label(
+                                    egui::RichText::new(if self.pool_msg.is_empty() {
+                                        pool_line.clone()
+                                    } else {
+                                        self.pool_msg.clone()
+                                    })
+                                    .font(pr(12.0))
+                                    .color(TEXT2),
+                                );
+                            },
                         );
                     });
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
-                        for r in &self.routes {
+                        for r in &display {
+                            let cooling = route_cooling(&r.prefix);
                             let (fg, bg) = if r.ok {
                                 (
                                     egui::Color32::from_rgb(8, 116, 88),
                                     egui::Color32::from_rgb(206, 245, 232),
                                 )
+                            } else if cooling {
+                                (TEXT2, egui::Color32::from_rgb(240, 226, 226))
                             } else {
                                 (TEXT2, egui::Color32::from_rgb(246, 232, 210))
                             };
                             let val = if r.ok {
                                 fmt_speed(r.speed)
+                            } else if cooling {
+                                "冷却中".to_string()
+                            } else if route_score(&r.prefix) > 0.0 {
+                                format!("≈{}", fmt_speed(route_score(&r.prefix)))
                             } else {
-                                "不可用".to_string()
+                                "未测".to_string()
                             };
-                            pill(ui, &format!("{}  {}", r.name, val), fg, bg);
+                            let on = self.prefer.as_deref() == Some(r.prefix.as_str());
+                            let label = if on {
+                                format!("★ {}  {}", r.name, val)
+                            } else {
+                                format!("{}  {}", r.name, val)
+                            };
+                            if pill_click(ui, &label, fg, bg, on).clicked() {
+                                clicked = Some(r.prefix.clone());
+                            }
                             ui.add_space(8.0);
                         }
-                        if self.routes.is_empty() {
+                        if display.is_empty() {
                             ui.label(
                                 egui::RichText::new("扫描完成后会自动测速")
                                     .font(pr(13.0))
@@ -3824,7 +4321,31 @@ impl eframe::App for App {
                             );
                         }
                     });
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "线路池放在仓库的 routes.json，改了这里不用发新版本；点线路名字固定使用，再点一次恢复自动挑选",
+                        )
+                        .font(pr(11.5))
+                        .color(TEXT2),
+                    );
                 });
+
+            if let Some(prefix) = clicked {
+                self.prefer = if self.prefer.as_deref() == Some(prefix.as_str()) {
+                    None
+                } else {
+                    Some(prefix)
+                };
+                // 固定线路同时把队列重排：下一个文件直接走它
+                self.status = match &self.prefer {
+                    Some(p) => format!("已固定线路：{}", p),
+                    None => "已恢复自动挑选线路".to_string(),
+                };
+            }
+            if do_update {
+                self.update_pool(ctx);
+            }
         }
 
         // ---------------- 主区域
@@ -4572,13 +5093,44 @@ fn main() -> eframe::Result<()> {
         font_check();
         return Ok(());
     }
-    // 自测入口：打印最终生效的线路表（内置 + exe 同目录 routes.txt）
+    // 自测入口：打印最终生效的线路表（线路池 + exe 同目录 routes.txt）
     if args.iter().any(|a| a == "--routes") {
+        if let Some(c) = load_pool_cache() {
+            *pool() = c;
+        }
         let list = all_routes();
+        let p = pool();
+        println!(
+            "线路池来源 {} · v{} · {} 条 · 更新于 {}",
+            src_cn(&p.source),
+            p.ver,
+            if p.routes.is_empty() { 0 } else { p.routes.len() },
+            if p.updated.is_empty() { "未知" } else { &p.updated }
+        );
         println!("共 {} 条线路：", list.len());
         for (i, (n, p)) in list.iter().enumerate() {
             println!("{:>2}. {:<20} {}", i + 1, n, p);
         }
+        return Ok(());
+    }
+    // 自测入口：强制更新一次线路池
+    if args.iter().any(|a| a == "--pool") {
+        let info = refresh_pool(true);
+        let msg = if info.routes.is_empty() {
+            "失败：没拉到任何线路（继续用内置表）".to_string()
+        } else {
+            format!(
+                "成功 {} · v{} · {} 条 · 更新于 {}",
+                src_cn(&info.source),
+                info.ver,
+                info.routes.len(),
+                if info.updated.is_empty() { "未知" } else { &info.updated }
+            )
+        };
+        println!("{}", msg);
+        let path = std::env::temp_dir().join("ro-pool-check.txt");
+        let _ = std::fs::write(&path, &msg);
+        println!("已写入 {}", path.display());
         return Ok(());
     }
     // 自测入口：跑一次「检测更新」，把结果写进临时文件（GUI 子系统没有 stdout）
