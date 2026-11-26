@@ -23,7 +23,9 @@
     probe: null,
     error: '',
     panel: null,
-    host: null
+    host: null,
+    promoTimer: 0,
+    promoUntil: 0       // 重绘时靠它把浮层的 .on 状态恢复回来
   };
 
   var CSS = [
@@ -102,11 +104,11 @@
     '.q.pz{background:#F6F4EE}',
     '.q .qbar.pause i{background:#C9C2B0}',
     '.qflag.pause{background:#E7E4DC}',
-    '.promo{display:flex;align-items:center;gap:6px;border-top:2px dashed #E0D5BE;padding-top:6px;font-size:11px;color:#5B5F70}',
-    '.promo .pz{color:#FF6A3D;font-size:12px;line-height:1}',
-    '.promo .pt2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.promo .pz2{border:2px solid #1A1E30;background:#FF6A3D;color:#fff;font-size:10px;font-weight:800;padding:1px 6px;cursor:pointer;white-space:nowrap;font-family:inherit}',
-    '.promo .pz2.gh{background:#FFFDF6;color:#1A1E30}',
+    '.ptoast{position:fixed;left:20px;bottom:20px;z-index:2147483001;display:flex;align-items:center;gap:6px;padding:7px 9px;background:#FFF3DC;border:3px solid #1A1E30;box-shadow:5px 5px 0 rgba(26,30,48,.8);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:11px;color:#5B5F70;opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .3s,transform .3s;max-width:300px}',
+    '.ptoast.on{opacity:1;transform:none;pointer-events:auto}',
+    '.ptoast .pz{color:#FF6A3D;font-size:12px;line-height:1}',
+    '.ptoast .pt2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.ptoast .pz2{border:2px solid #1A1E30;background:#FF6A3D;color:#fff;font-size:10px;font-weight:800;padding:1px 6px;cursor:pointer;white-space:nowrap;font-family:inherit}',
     '.rlist{border:2px solid #1A1E30;background:#FFFDF6;max-height:184px;overflow:auto}',
     '.rline{display:flex;align-items:center;gap:8px;padding:3px 8px;font-size:11px;border-bottom:1px dashed #E6DCC6;cursor:pointer}',
     '.rline:hover{background:#FFF7E6}',
@@ -366,6 +368,23 @@
     });
   }
 
+  /* 引流浮层：下载开始时在页面左下角出现，8 秒后自己收回 */
+  function showPromo(ms) {
+    var root = state.host && state.host.shadowRoot;
+    if (!root) return;
+    var el = root.getElementById('ptoast');
+    if (!el) return;
+    state.promoUntil = Date.now() + (ms || 8000);
+    el.classList.add('on');
+    clearTimeout(state.promoTimer);
+    state.promoTimer = setTimeout(function () {
+      state.promoUntil = 0;
+      var cur = state.host && state.host.shadowRoot;
+      var node = cur && cur.getElementById('ptoast');
+      if (node) node.classList.remove('on');
+    }, ms || 8000);
+  }
+
   function startPoll() {
     if (state.timer) return;
     state.timer = setInterval(async function () {
@@ -462,12 +481,6 @@
             '<button class="go" id="go"' + (picked.length ? '' : ' disabled') + '>下载 ' + picked.length + ' 个文件' +
               (pickedSize ? '（' + fmtSize(pickedSize) + '）' : '') + '</button>' +
             '<div class="tip">保存到「下载/GitHub/仓库/版本」，可在扩展设置里关掉归档</div>' +
-            '<div class="promo">' +
-              '<span class="pz">✦</span>' +
-              '<span class="pt2">' + esc(PROMO.short) + '</span>' +
-              '<button class="pz2" data-url="' + esc(PROMO.url) + '">领取积分</button>' +
-              '<button class="pz2 gh" data-url="' + esc(PROMO.more) + '">更多 →</button>' +
-            '</div>' +
           '</div>' +
         '</div>'
       ) : (
@@ -478,6 +491,11 @@
           '<span class="dot">' + (state.assets.length || '') + '</span>' +
         '</div>'
       )) +
+      '<div class="ptoast' + (state.promoUntil > Date.now() ? ' on' : '') + '" id="ptoast">' +
+        '<span class="pz">✦</span>' +
+        '<span class="pt2">' + esc(PROMO.short) + '</span>' +
+        '<button class="pz2" data-url="' + esc(PROMO.url) + '">领取积分</button>' +
+      '</div>' +
       '</div>';
 
     root.innerHTML = '<style>' + CSS + '</style>' + html;
@@ -592,6 +610,7 @@
       }
       var extra = res.blocked ? '（' + res.blocked + ' 个已在队列）' : '';
       go.textContent = '已加入 ' + res.added + ' 个' + extra;
+      showPromo();
       // 面板不关：下载进度就显示在上面的队列里
       startPoll();
       var st0 = await bgSend('state', {});

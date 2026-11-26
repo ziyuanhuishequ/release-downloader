@@ -519,6 +519,19 @@
     }
     await poll();
     renderFooter();
+    showPromo();
+  }
+
+  /* 引流浮层：下载开始时右下角出现，8 秒后自动收起（不再常驻底部） */
+  var promoTimer = 0;
+  function showPromo(ms) {
+    var el = $('promoToast');
+    if (!el) return;
+    el.classList.add('on');
+    clearTimeout(promoTimer);
+    promoTimer = setTimeout(function () {
+      el.classList.remove('on');
+    }, ms || 8000);
   }
 
   async function poll() {
@@ -581,9 +594,7 @@
       };
     });
     var pmTitle = $('promoTitle');
-    if (pmTitle) { pmTitle.textContent = PROMO.title; }
-    var pmDesc = $('promoDesc');
-    if (pmDesc) { pmDesc.textContent = PROMO.desc; }
+    if (pmTitle) { pmTitle.textContent = PROMO.short; }
     document.querySelectorAll('.tg[data-filter]').forEach(function (b) {
       b.onclick = function () {
         st.filter = b.getAttribute('data-filter');

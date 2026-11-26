@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.2.0-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.2.0-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -58,6 +58,7 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
   下完的会记住（清浏览器数据或点设置页「清除下载记录」才会忘）
 - 线路面板可展开，看 20 条线路的实测速度与成功率，点一条固定使用
 - 线路池从仓库 `routes.json` 拉取（12 小时一次），镜像增减不用等扩展更新
+- 下载开始时右下角会短暂浮现作者的小提示条，几秒后自动收起，不常驻、不挡操作
 
 ## 设置
 

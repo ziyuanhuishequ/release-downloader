@@ -178,25 +178,28 @@ body {
   border-bottom: 1px solid #E0D5BE;
 }
 
-/* 引流条：一直挂在列表下方，不占操作路径 */
-.promo {
+/* 引流浮层：只在下载开始时从右下角飘出来，8 秒后自己收回去 */
+.toast {
+  position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 60;
   display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px; background: #FFF3DC;
-  border-top: 2px solid var(--ink);
+  max-width: 300px;
+  padding: 7px 9px; background: #FFF3DC;
+  border: 2px solid var(--ink); box-shadow: 4px 4px 0 rgba(26, 30, 48, .22);
+  opacity: 0; transform: translateY(8px); pointer-events: none;
+  transition: opacity .3s ease, transform .3s ease;
 }
-.promo .pz { color: var(--coral); font-size: 13px; line-height: 1; }
-.promo .pt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-.promo .pt b { font-size: 11.5px; font-weight: 800; color: var(--ink); }
-.promo .pt i { font-size: 10.5px; font-style: normal; color: var(--text2);
+.toast.on { opacity: 1; transform: none; pointer-events: auto; }
+.toast .tz { color: var(--coral); font-size: 13px; line-height: 1; }
+.toast .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.toast .tx b { font-size: 11px; font-weight: 800; color: var(--ink); white-space: nowrap; }
+.toast .tx i { font-size: 10.5px; font-style: normal; color: var(--text2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.promo .pl {
+.toast .tbtn {
   border: 2px solid var(--ink); background: var(--coral); color: #fff;
   font-size: 10.5px; font-weight: 800; padding: 2px 7px; cursor: pointer;
-  white-space: nowrap; text-decoration: none; font-family: inherit;
+  white-space: nowrap; font-family: inherit;
 }
-.promo .pl:hover { background: #FF7E55; }
-.promo .pl.ghost { background: var(--paper); color: var(--ink); }
-.promo .pl.ghost:hover { background: #fff; }
+.toast .tbtn:hover { background: #FF7E55; }
 
 /* 线路面板 */
 .rlist {
@@ -226,7 +229,7 @@ body {
 .rfoot .lnk { margin-left: auto; }
 
 /* 底部 */
-.ft { padding: 9px 12px 10px; background: var(--cream); }
+.ft { position: relative; padding: 9px 12px 10px; background: var(--cream); }
 .route { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 11.5px; color: var(--text2); }
 .pill {
   border: 2px solid var(--ink); font-size: 11px; font-weight: 700;

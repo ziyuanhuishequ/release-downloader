@@ -42,16 +42,6 @@
     </div>
   </main>
 
-  <div class="promo">
-    <span class="pz">✦</span>
-    <span class="pt">
-      <b id="promoTitle">本软件由 AI 工具免费制作</b>
-      <i id="promoDesc">每日可领 5000 积分，同款工具自己也能做</i>
-    </span>
-    <button class="pl" id="lnkPromo">领取积分</button>
-    <a class="pl ghost" id="lnkMore" href="#">更多 →</a>
-  </div>
-
   <footer class="ft">
     <div id="rlist" class="rlist hide"></div>
     <div class="route" id="route">
@@ -64,6 +54,13 @@
       <span id="queue">队列空闲</span>
       <span id="dlCount"></span>
       <a href="#" id="lnkHelp">怎么安装到别的浏览器？</a>
+    </div>
+
+    <!-- 下载开始时从右下角飘一下，几秒后自动消失，不长期占位 -->
+    <div class="toast" id="promoToast">
+      <span class="tz">✦</span>
+      <span class="tx"><b id="promoTitle">AI 免费制作 · 每日领 5000 积分</b></span>
+      <button class="tbtn" id="lnkPromo">领取</button>
     </div>
   </footer>
 </div>
