@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.0.0-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.1.0-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.0.0-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.1.0-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -46,6 +46,10 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
 两种方式都支持：
 - 全选 / 按平台筛选
 - 自动测速 20 条加速线路，优先走最快的那条
+- 多线程分片：1MB 以上的文件切成 2~6 片并发（都在最快的那条线路上），下完自动拼装
+- 每条任务显示实时速度、剩余时间；速度慢会自动「暂停→继续」重连（最多 5 次）
+- 队列里可以手动「换线路」「取消」，不用等它慢慢下完
+- 某一片 20 秒没动静会自动断开换线路，不会卡死在一条死连接上
 - 下载前先探 256KB 校验（防镜像返回网页），不对自动换线
 - 断线、5xx 自动降级到备用线路重试，坏线路冷却 3 分钟
 - 按 `下载/GitHub/仓库名/版本号/文件名` 归档，可选关掉
@@ -115,9 +119,10 @@ python build.py
 | | 桌面版 exe | 浏览器扩展 |
 | --- | --- | --- |
 | 安装 | 下载即用 | 需要手动加载一次 |
-| 多分片下载 | 4/6/8 段并发 | 交给浏览器单连接 |
+| 多分片下载 | 4/6/8 段并发 | 1MB 以上 2~6 段并发 |
 | 断点续传 | 支持，`.partN` 保留 | 依赖浏览器自身 |
 | 跨域限制 | 无 | 测速受镜像 CORS 影响 |
+| 检测更新 | 顶栏 GitHub 图标 | 设置页「检测更新」 |
 | 平台 | Windows | 所有 Chromium 浏览器 + Firefox |
 
 日常想快点、想断点续传用 exe；在别人的电脑上、或只想随手拉一个文件，用扩展。

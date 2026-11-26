@@ -40,6 +40,9 @@ def firefox_manifest():
     m = json.load(open(os.path.join(HERE, "manifest.json"), encoding="utf-8"))
     m.pop("minimum_chrome_version", None)
     m.pop("optional_host_permissions", None)
+    # Firefox 没有 offscreen API，分片下载会自动退回单连接
+    if "permissions" in m:
+        m["permissions"] = [p for p in m["permissions"] if p != "offscreen"]
     m["background"] = {"scripts": ["src/common.js", "src/bg.js"]}
     m["browser_specific_settings"] = {
         "gecko": {

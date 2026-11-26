@@ -15,7 +15,11 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.3";
+const APP_VERSION: &str = "1.6.4";
+/// 检测更新要查的仓库
+const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
+/// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
+const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
 const USER_AGENT: &str = "ReleaseOrganizer/1.6.3";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
@@ -1797,6 +1801,13 @@ struct App {
     show_routes: bool,
     pending_download: bool,
     icon_tex: Option<egui::TextureHandle>,
+    /// 顶栏 GitHub 小图标
+    gh_tex: Option<egui::TextureHandle>,
+    /// 检测更新状态 + 后台结果通道
+    upd: Upd,
+    /// 启动后自动查一次，免得用户不知道有这个功能
+    upd_once: bool,
+    upd_rx: Option<Receiver<Result<(String, String), String>>>,
     /// 引流小卡片的自动关闭时刻（None = 不显示）
     toast_until: Option<Instant>,
     /// 说明浮层：鼠标从何时起停在某条说明上 / 卡片最终摆在哪（固定后不跟着鼠标抖）
@@ -1832,6 +1843,11 @@ impl App {
                 s.interaction.show_tooltips_only_when_still = false;
             });
         }
+        let gh_tex = Some(cc.egui_ctx.load_texture(
+            "gh-mark",
+            egui::ColorImage::from_rgba_unmultiplied([64, 64], GH_ICON_RGBA),
+            egui::TextureOptions::LINEAR,
+        ));
         let icon_tex = Some(cc.egui_ctx.load_texture(
             "app-icon",
             egui::ColorImage::from_rgba_unmultiplied(
@@ -1893,6 +1909,10 @@ impl App {
             show_routes: false,
             pending_download: false,
             icon_tex,
+            gh_tex,
+            upd: Upd::Idle,
+            upd_once: false,
+            upd_rx: None,
             toast_until: None,
             tip_wait: None,
             tip_pos: None,
@@ -2881,6 +2901,69 @@ fn platform_badge(ui: &mut egui::Ui, folder: &str) {
 }
 
 /// 可点击的像素小标签（顶部线路状态用）
+/// 检测更新的状态机
+#[derive(Clone)]
+enum Upd {
+    Idle,
+    Busy,
+    Latest,
+    /// (最新版本号, Release 页面地址)
+    Newer(String, String),
+    Fail(String),
+}
+
+/// 把 v1.6.3 / 1.6.3 解析成可比较的三段版本号
+fn parse_ver(s: &str) -> Option<(u32, u32, u32)> {
+    let s = s.trim().trim_start_matches(['v', 'V']);
+    let mut it = s.split('.');
+    let a: u32 = it.next()?.parse().ok()?;
+    let b: u32 = it.next().unwrap_or("0").parse().ok()?;
+    let third = it.next().unwrap_or("0");
+    let digits: String = third.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let c: u32 = digits.parse().unwrap_or(0);
+    Some((a, b, c))
+}
+
+/// 查这个仓库里最新的**桌面版** Release（扩展版是 ext-v 开头，跳过）。
+/// 不能用 /releases/latest：那个会返回最近发布的那个，可能是扩展版。
+fn fetch_latest_desktop() -> Result<(String, String), String> {
+    let ag = agent(20);
+    let url = format!(
+        "https://api.github.com/repos/{}/releases?per_page=30",
+        REPO_SLUG
+    );
+    let resp = ag
+        .get(&url)
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(403, _) => "请求太频繁（403），过一会儿再试".to_string(),
+            ureq::Error::Status(code, _) => format!("HTTP {}", code),
+            e => format!("网络错误：{}", e),
+        })?;
+    let v: Value = resp
+        .into_json()
+        .map_err(|e| format!("解析失败：{}", e))?;
+    let arr = v.as_array().ok_or_else(|| "返回格式不对".to_string())?;
+    let mut best: Option<((u32, u32, u32), String, String)> = None;
+    for r in arr {
+        if r["draft"].as_bool() == Some(true) {
+            continue;
+        }
+        let tag = r["tag_name"].as_str().unwrap_or("");
+        if !tag.starts_with('v') {
+            continue;
+        }
+        let Some(ver) = parse_ver(tag) else { continue };
+        let page = r["html_url"].as_str().unwrap_or("").to_string();
+        if best.as_ref().map_or(true, |b| ver > b.0) {
+            best = Some((ver, tag.to_string(), page));
+        }
+    }
+    best.map(|b| (b.1, b.2))
+        .ok_or_else(|| "没找到桌面版 Release".to_string())
+}
+
 fn chip(
     ui: &mut egui::Ui,
     text: &str,
@@ -2915,6 +2998,104 @@ fn chip(
 }
 
 impl App {
+    /// 顶栏右侧的「GitHub 图标 + 检测更新」。有新版本时点一下直接去 Release 页。
+    fn gh_update_chip(&mut self, ui: &mut egui::Ui) {
+        let (label, fg, bg) = match &self.upd {
+            Upd::Busy => ("检测中…".to_string(), TEXT2, SOFT),
+            Upd::Latest => (
+                "已是最新".to_string(),
+                egui::Color32::from_rgb(8, 116, 88),
+                egui::Color32::from_rgb(206, 245, 232),
+            ),
+            Upd::Newer(v, _) => (
+                format!("有新版本 {}", v),
+                egui::Color32::from_rgb(176, 36, 28),
+                egui::Color32::from_rgb(255, 226, 220),
+            ),
+            Upd::Fail(_) => (
+                "检测失败，点此重试".to_string(),
+                egui::Color32::from_rgb(150, 92, 6),
+                egui::Color32::from_rgb(255, 236, 190),
+            ),
+            Upd::Idle => ("检测更新".to_string(), INK, CREAM),
+        };
+        let font = px(13.5);
+        let tw = ui.fonts(|f| {
+            f.layout_no_wrap(label.clone(), font.clone(), fg)
+                .size()
+                .x
+        });
+        let icon = 20.0;
+        let w = 8.0 + icon + 7.0 + tw + 12.0;
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 32.0), egui::Sense::click());
+        let body = egui::Rect::from_min_size(rect.min, rect.size() - egui::vec2(3.0, 3.0));
+        let p = ui.painter();
+        p.rect_filled(
+            egui::Rect::from_min_size(body.min + egui::vec2(3.0, 3.0), body.size()),
+            egui::Rounding::same(0.0),
+            INK,
+        );
+        p.rect(
+            body,
+            egui::Rounding::same(0.0),
+            if resp.hovered() { SUN } else { bg },
+            egui::Stroke::new(2.5, INK),
+        );
+        if let Some(tex) = &self.gh_tex {
+            let ir = egui::Rect::from_center_size(
+                egui::pos2(body.left() + 8.0 + icon / 2.0, body.center().y),
+                egui::vec2(icon, icon),
+            );
+            p.image(
+                tex.id(),
+                ir,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        p.text(
+            egui::pos2(body.left() + 8.0 + icon + 7.0, body.center().y),
+            egui::Align2::LEFT_CENTER,
+            &label,
+            font.clone(),
+            fg,
+        );
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let tip = match &self.upd {
+            Upd::Newer(_, url) => format!("点击打开下载页：{}", url),
+            Upd::Fail(e) => format!("上次检测失败：{}\n点击重试", e),
+            Upd::Latest => format!("当前已是最新版本 v{}", APP_VERSION),
+            Upd::Busy => "正在向 GitHub 查询最新版本…".to_string(),
+            Upd::Idle => "到 GitHub 上看看有没有新版本（软件和扩展都在同一个 Release 页）".to_string(),
+        };
+        let resp = resp.on_hover_text(tip);
+        if resp.clicked() {
+            if let Upd::Newer(_, url) = self.upd.clone() {
+                open_url(&url);
+            } else if !matches!(self.upd, Upd::Busy) {
+                self.start_update_check(ui.ctx());
+            }
+        }
+    }
+
+    /// 后台线程查 GitHub，界面每帧 try_recv，不阻塞 UI
+    fn start_update_check(&mut self, ctx: &egui::Context) {
+        if matches!(self.upd, Upd::Busy) {
+            return;
+        }
+        self.upd = Upd::Busy;
+        let (tx, rx) = channel();
+        self.upd_rx = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let r = fetch_latest_desktop();
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+    }
+
     fn best_route(&self) -> Option<Route> {
         self.routes
             .iter()
@@ -3190,6 +3371,30 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut start_after_probe = false;
 
+        if !self.upd_once {
+            self.upd_once = true;
+            self.start_update_check(ctx);
+        }
+
+        // 检测更新的后台结果
+        if let Some(rx) = &self.upd_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.upd_rx = None;
+                self.upd = match res {
+                    Ok((tag, url)) => {
+                        let cur = parse_ver(APP_VERSION).unwrap_or((0, 0, 0));
+                        let new = parse_ver(&tag).unwrap_or((0, 0, 0));
+                        if new > cur {
+                            Upd::Newer(tag, url)
+                        } else {
+                            Upd::Latest
+                        }
+                    }
+                    Err(e) => Upd::Fail(e),
+                };
+            }
+        }
+
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Scan(rows, errors) => {
@@ -3375,6 +3580,8 @@ impl eframe::App for App {
                                         .font(pr(13.0))
                                         .color(TEXT2),
                                 );
+                                ui.add_space(10.0);
+                                self.gh_update_chip(ui);
                                 ui.add_space(10.0);
                                 let best = self.best_route();
                                 let (txt, fg, bg) = match &best {
@@ -4372,6 +4579,23 @@ fn main() -> eframe::Result<()> {
         for (i, (n, p)) in list.iter().enumerate() {
             println!("{:>2}. {:<20} {}", i + 1, n, p);
         }
+        return Ok(());
+    }
+    // 自测入口：跑一次「检测更新」，把结果写进临时文件（GUI 子系统没有 stdout）
+    if args.iter().any(|a| a == "--check-update") {
+        let msg = match fetch_latest_desktop() {
+            Ok((tag, url)) => {
+                let cur = parse_ver(APP_VERSION).unwrap_or((0, 0, 0));
+                let new = parse_ver(&tag).unwrap_or((0, 0, 0));
+                let st = if new > cur { "有新版本" } else { "已是最新" };
+                format!("{} current={} latest={} url={}", st, APP_VERSION, tag, url)
+            }
+            Err(e) => format!("失败：{}", e),
+        };
+        println!("{}", msg);
+        let p = std::env::temp_dir().join("ro-update-check.txt");
+        let _ = std::fs::write(&p, &msg);
+        println!("已写入 {}", p.display());
         return Ok(());
     }
     // 隐藏自测入口：列出某个目录里可续传的任务

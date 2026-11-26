@@ -66,6 +66,51 @@
   </section>
 
   <section class="card">
+    <h2>下载加速</h2>
+
+    <label class="line">
+      <input type="checkbox" id="segEnabled">
+      <span>
+        <b>多线程分片下载</b>
+        <i>把一个文件切成几段同时下，比浏览器单连接快得多；完成后自动拼回一个文件。慢下来会自动重连，某片卡死会换线路</i>
+      </span>
+    </label>
+
+    <label class="line">
+      <span class="lab">分几片</span>
+      <select id="threads">
+        <option value="2">2 片</option>
+        <option value="3">3 片</option>
+        <option value="4">4 片（推荐）</option>
+        <option value="6">6 片</option>
+      </select>
+      <i>都在当前最快的那条线路上并发；实测 2~4 片最划算，镜像按 IP 限速，片数太多反而互相挤</i>
+    </label>
+
+    <label class="line">
+      <span class="lab">分片上限</span>
+      <select id="segMaxMB">
+        <option value="32">32 MB</option>
+        <option value="64">64 MB</option>
+        <option value="128">128 MB（推荐）</option>
+        <option value="256">256 MB</option>
+      </select>
+      <i>超过这个大小改走浏览器单连接：分片要在内存里拼装，太大容易占满内存</i>
+    </label>
+
+    <label class="line">
+      <span class="lab">慢速判定</span>
+      <select id="lowSpeedKB">
+        <option value="20">20 KB/s</option>
+        <option value="40">40 KB/s（推荐）</option>
+        <option value="100">100 KB/s</option>
+        <option value="300">300 KB/s</option>
+      </select>
+      <i>低于这个速度一段时间，界面会标「速度慢」并给出换线路按钮</i>
+    </label>
+  </section>
+
+  <section class="card">
     <h2>GitHub Token <span class="opt">可选</span></h2>
     <p class="note">
       不填也能用，但 GitHub 匿名接口每小时只有 60 次，扫描多了会返回 403。
@@ -98,6 +143,19 @@
         点「临时载入附加组件」，选中文件夹里的 <code>manifest.json</code>。</li>
       <li>换电脑时把文件夹拷过去，重复上面步骤即可，不需要安装包。</li>
     </ul>
+  </section>
+
+  <section class="card">
+    <h2>版本与更新</h2>
+    <div class="row" style="align-items:center;gap:12px;flex-wrap:wrap">
+      <a class="repo" href="https://github.com/ziyuanhuishequ/release-downloader" target="_blank" rel="noreferrer" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none">
+        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" style="flex:none"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+        <span>GitHub 项目主页</span>
+      </a>
+      <button id="btnCheck" class="btn small">检测更新</button>
+      <span id="updInfo" class="note tiny"></span>
+    </div>
+    <p class="note tiny">扩展是「加载已解压」方式装的，检测到新版后下载压缩包，解压覆盖原文件夹，再到扩展管理页点一次「重新加载」即可；桌面版 exe 也在同一个 Release 页。</p>
   </section>
 
   <footer class="foot">

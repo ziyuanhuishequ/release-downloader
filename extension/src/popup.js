@@ -63,21 +63,56 @@
     if (b) b.onclick = function () { doProbe(); };
   }
 
+  /* 任务条：百分比 + 实时速度 + 剩余时间 + 生效线路，慢了给一键换线路 */
   function taskStripHtml() {
     var live = st.tasks.filter(function (t) {
       return t.status === 'downloading' || t.status === 'probing' || t.status === 'queued';
     });
-    if (!live.length) return '';
-    var html = '<div class="sec-title">正在下载 ' + live.length + ' 个（点浏览器右上角下载图标看全部）</div>';
-    live.slice(0, 3).forEach(function (t) {
-      var total = t.total || t.size || 0;
-      var pct = total > 0 ? Math.min(100, Math.round(t.received / total * 100)) : 0;
-      html += '<div class="task">' +
-        '<div class="tn">' + esc(t.name) + '</div>' +
-        '<div class="tb"><div class="bar"><i style="width:' + pct + '%"></i></div>' +
-        '<span class="tm">' + (t.status === 'downloading' ? pct + '% · ' + esc(t.route || '') : (t.status === 'probing' ? '选线中' : '排队')) + '</span></div>' +
-        '</div>';
-    });
+    var recent = st.tasks.filter(function (t) {
+      return t.status === 'done' || t.status === 'failed';
+    }).slice(-1);
+    if (!live.length && !recent.length) return '';
+
+    var totalSpeed = live.reduce(function (s, t) { return s + (t.speed || 0); }, 0);
+    var html = '';
+    if (live.length) {
+      html += '<div class="sec-title">正在下载 ' + live.length + ' 个' +
+        (totalSpeed ? ' · 共 ' + fmtSpeed(totalSpeed) : '') + '</div>';
+      live.slice(0, 3).forEach(function (t) {
+        var total = t.total || t.size || 0;
+        var pct = total > 0 ? Math.min(100, Math.round(t.received / total * 100)) : 0;
+        var eta = (t.speed && total) ? fmtEta((total - t.received) / t.speed) : '';
+        var meta;
+        if (t.status === 'probing') meta = '选线中…';
+        else if (t.status === 'queued') meta = '排队中';
+        else if (t.boosting) meta = '自动提速中…';
+        else {
+          meta = pct + '%';
+          if (t.speed) meta += ' · ' + fmtSpeed(t.speed);
+          if (eta) meta += ' · 剩 ' + eta;
+        }
+        var tag = '';
+        if (t.slow && t.status === 'downloading') tag = '<span class="tflag bad">速度慢</span>';
+        else if (t.boosting) tag = '<span class="tflag ok">提速</span>';
+        else if (t.segmented && t.status === 'downloading') tag = '<span class="tflag">多线程</span>';
+        html += '<div class="task">' +
+          '<div class="tn"><span class="tname">' + esc(t.name) + '</span>' +
+          (t.route ? '<span class="trt">' + esc(t.route) + '</span>' : '') + tag + '</div>' +
+          '<div class="tb"><div class="bar"><i style="width:' + pct + '%"></i></div>' +
+          '<span class="tm">' + esc(meta) + '</span></div>' +
+          (t.status === 'downloading' || t.status === 'queued'
+            ? '<div class="tact"><button class="lnk" data-sw="' + esc(t.id) + '">换线路</button>' +
+              '<button class="lnk" data-cx="' + esc(t.id) + '">取消</button></div>'
+            : '') +
+          '</div>';
+      });
+    }
+    if (recent.length && !live.length) {
+      var r = recent[0];
+      html += '<div class="tlast ' + (r.status === 'failed' ? 'bad' : 'ok') + '">' +
+        (r.status === 'failed' ? '刚才失败：' : '刚完成：') + esc(r.name) +
+        (r.error ? '（' + esc(r.error) + '）' : '') + '</div>';
+    }
     return html;
   }
 
@@ -87,7 +122,21 @@
     if (!wrap) return;
     var keep = wrap.innerHTML;
     var next = taskStripHtml();
-    if (keep !== next) wrap.innerHTML = next;
+    if (keep === next) return;
+    wrap.innerHTML = next;
+    wrap.querySelectorAll('[data-sw]').forEach(function (b) {
+      b.onclick = function () {
+        b.textContent = '换线中…';
+        b.disabled = true;
+        bgSend('switch-route', { id: b.getAttribute('data-sw') });
+      };
+    });
+    wrap.querySelectorAll('[data-cx]').forEach(function (b) {
+      b.onclick = function () {
+        b.disabled = true;
+        bgSend('cancel-task', { id: b.getAttribute('data-cx') });
+      };
+    });
   }
 
   function renderBody() {

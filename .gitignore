@@ -26,6 +26,7 @@ Thumbs.db
 /GitHub-Release-Downloader-Source-v*.zip
 /_dl_check.*
 /_zipchk/
+/_zipchk2/
 /_cprof*
 /浏览器扩展/
 /extension.pem
@@ -38,3 +39,5 @@ Thumbs.db
 /_t[0-9]*.mjs
 /_dbg*.mjs
 /_shot_*.png
+/_gh_*.png
+/_app_shot.png

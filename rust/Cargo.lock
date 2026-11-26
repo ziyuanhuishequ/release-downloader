@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "release-organizer"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "eframe",
  "egui_extras",

@@ -26,6 +26,7 @@
   整轮网络类失败会等 2 秒自动重试一次
 - **Token 支持**：未登录 GitHub API 每小时限 60 次，填 Token 可提升额度
 - **完成提醒**：全部下完后弹窗询问是否直接打开保存文件夹
+- **检测更新**：顶栏有 GitHub 图标 + 「检测更新」，点一下就知道有没有新版本，有新版本直接跳下载页
 - **像素风界面**：全部控件手绘，无第三方 UI 库皮肤
 - **浏览器扩展版**：不想装软件时，在 Release 页勾选即下（见下方「浏览器扩展」一节）
 
@@ -49,8 +50,8 @@
 
 ## 使用
 
-1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.3.exe`，双击运行，无需安装
-   （同一页还有浏览器扩展版和 v1.6.3 源码包）
+1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载 `GitHub-Release-Downloader-Desktop-v1.6.4.exe`，双击运行，无需安装
+   （同一页还有浏览器扩展版和 v1.6.4 源码包）
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -66,8 +67,11 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub-Release-Downloader-Ext-v1.0.0-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.1.0-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
+
+扩展 v1.1.0 起也支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
+慢速自动「暂停→继续」、手动换线路，以及设置页里的「检测更新」。
 
 用法、设置、与桌面版的差别见 [extension/README.md](extension/README.md)。
 

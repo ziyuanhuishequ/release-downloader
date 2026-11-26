@@ -6,7 +6,7 @@ var EXT = (typeof browser !== 'undefined' && browser && browser.runtime) ? brows
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.0.0',
+  version: '1.1.0',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -42,7 +42,11 @@ var DEFAULT_SETTINGS = {
   extraRoutes: [],         // 自定义线路 [{name, prefix}]
   token: '',               // GitHub Token（可选，提高 API 额度、支持私有仓库）
   notify: true,            // 批量完成后系统通知
-  preferWindows: false     // 默认只勾选 Windows 资源
+  preferWindows: false,    // 默认只勾选 Windows 资源
+  segEnabled: true,        // 分片并发下载（多线程）
+  threads: 4,              // 每个文件切几片
+  segMaxMB: 128,           // 超过这个大小改走浏览器单连接（拼装要占内存）
+  lowSpeedKB: 40           // 低于这个速度算「慢」，用来提示换线路
 };
 
 var MIRROR_TIMEOUT_MS = 8000;
@@ -64,6 +68,14 @@ function fmtSize(n) {
 function fmtSpeed(bps) {
   if (!bps || bps <= 0) return '—';
   return fmtSize(bps) + '/s';
+}
+
+/* 剩余时间，粗到「分」就够用 */
+function fmtEta(seconds) {
+  if (!seconds || seconds < 0 || !isFinite(seconds)) return '';
+  if (seconds < 60) return Math.max(1, Math.round(seconds)) + ' 秒';
+  if (seconds < 3600) return Math.round(seconds / 60) + ' 分';
+  return (seconds / 3600).toFixed(1) + ' 小时';
 }
 
 /* "2.37 MB" -> 字节数 */

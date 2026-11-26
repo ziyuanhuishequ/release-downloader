@@ -8,6 +8,30 @@ var activeIds = new Map();   // downloadId -> task
 var pumping = false;
 var badUntil = new Map();    // routePrefix -> 时间戳，短时间不再用
 var probeCache = null;       // {key, ts, list}
+var segTasks = new Map();    // taskId -> task，正在分片下载的
+var settingsCache = null;    // 事件回调里不反复读 storage
+
+var SLOW_JUDGE_MS = 9000;    // 速度一直上不去，持续这么久就标记「慢」
+var AUTO_SWITCH_MS = 16000;  // 而且几乎没下多少，就自动换一条线重来
+
+/* 事件回调里用缓存，避免每次 onChanged 都读一遍 storage */
+async function settingsNow() {
+  if (!settingsCache) settingsCache = await getSettings();
+  return settingsCache;
+}
+try {
+  EXT.storage.onChanged.addListener(function (changes, area) {
+    if (area !== 'local' || !changes.settings) return;
+    // 直接重建成新值，而不是清空：清空后同步代码会退回默认值，
+    // 用户刚改的「慢速阈值」「线程数」在本次下载里就不生效了。
+    var raw = changes.settings.newValue || {};
+    var next = {};
+    Object.keys(DEFAULT_SETTINGS).forEach(function (k) {
+      next[k] = (raw[k] === undefined || raw[k] === null) ? DEFAULT_SETTINGS[k] : raw[k];
+    });
+    settingsCache = next;
+  });
+} catch (e) {}
 
 /* ---------------- GitHub API ---------------- */
 
@@ -183,7 +207,17 @@ async function routesForFile(url, settings) {
   });
   var now = Date.now();
   var fresh = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) < now; });
-  return fresh.length ? fresh : order;
+  var list = fresh.length ? fresh : order;
+  // 手动指定的线路优先
+  if (settings && settings.preferRoute) {
+    var pi = -1;
+    list.forEach(function (r, i) { if (r.prefix === settings.preferRoute) pi = i; });
+    if (pi > 0) {
+      var pick = list.splice(pi, 1)[0];
+      list.unshift(pick);
+    }
+  }
+  return list;
 }
 
 /* 真正开下之前先探一字节：确认这条线路给的是文件而不是错误页 */
@@ -262,6 +296,276 @@ async function persist() {
 function pushTask(t) {
   tasks.push(t);
   if (tasks.length > 60) tasks = tasks.slice(-60);
+}
+
+/* 按两次事件之间的增量算瞬时速度，再做一次平滑，避免数字乱跳 */
+function sampleSpeed(task, received) {
+  var now = Date.now();
+  var prev = task._sp;
+  if (!prev) { task._sp = { b: received, t: now }; return; }
+  var dt = (now - prev.t) / 1000;
+  if (dt < 0.35) return;
+  var inst = Math.max(0, (received - prev.b) / dt);
+  task.speed = Math.round(task.speed ? task.speed * 0.45 + inst * 0.55 : inst);
+  if (!task.bestSpeed || task.speed > task.bestSpeed) task.bestSpeed = task.speed;
+  task._sp = { b: received, t: now };
+  maybeBoost(task);
+  judgeSlow(task);
+}
+
+/* 自动「暂停→继续」提速：
+ * 单连接靠 downloads 的 pause/resume，等于让浏览器换一条连接重新要剩余字节；
+ * 分片下载则把慢掉的分片重连，已经下好的部分不丢。
+ * 触发条件跟桌面版一致：掉到本次峰值 45% 以下、连着两次、间隔 25 秒、最多 5 次。 */
+function maybeBoost(task) {
+  var total = task.total || task.size || 0;
+  if (!total) return false;
+  if ((task.boostCount || 0) >= 5) return false;
+  if (total - task.received < 1024 * 1024) return false;    // 尾巴就不折腾了
+  var now = Date.now();
+  if (now - (task.lastBoostAt || 0) < 25000) return false;
+  var th = Math.max(5, (settingsCache || DEFAULT_SETTINGS).lowSpeedKB || 40) * 1024;
+  // 两种情况都值得重连：掉到本次峰值一半以下，或者本身就慢得可怜
+  var dip = task.bestSpeed && task.speed < task.bestSpeed * 0.45;
+  var absSlow = task.speed > 0 && task.speed < th;
+  if (!dip && !absSlow) {
+    task.slowStreak = 0;
+    return false;
+  }
+  task.slowStreak = (task.slowStreak || 0) + 1;
+  if (task.slowStreak < 2) return false;
+  task.slowStreak = 0;
+  task.boostCount = (task.boostCount || 0) + 1;
+  task.lastBoostAt = now;
+  task.boosting = true;
+  setTimeout(function () { task.boosting = false; }, 1800);
+  if (task.segmented) {
+    segSend({ type: 'seg-boost', id: task.id });
+  } else if (task.downloadId) {
+    try {
+      EXT.downloads.pause(task.downloadId, function () {
+        void EXT.runtime.lastError;
+        setTimeout(function () {
+          try {
+            EXT.downloads.resume(task.downloadId, function () { void EXT.runtime.lastError; });
+          } catch (e) {}
+        }, 400);
+      });
+    } catch (e) {}
+  }
+  return true;
+}
+
+/* 慢速判定：连续 SLOW_JUDGE_MS 低于阈值就把任务标成 slow，界面据此提示换线路 */
+function judgeSlow(task) {
+  var s = settingsCache || DEFAULT_SETTINGS;
+  var th = Math.max(5, s.lowSpeedKB || 40) * 1024;
+  var total = task.total || task.size || 0;
+  var now = Date.now();
+  if (!task.speed || task.speed > th * 1.6 || (total && task.received > total * 0.92)) {
+    task.slowSince = 0;
+    task.slow = false;
+    return;
+  }
+  if (!task.slowSince) { task.slowSince = now; return; }
+  if (now - task.slowSince >= SLOW_JUDGE_MS) task.slow = true;
+  // 自动提速都救不回来、而且几乎没下多少，才换线路重来
+  if (now - task.slowSince >= AUTO_SWITCH_MS && !task.autoSwitched &&
+      (task.boostCount || 0) >= 2 &&
+      (!total || task.received < total * 0.08)) {
+    task.autoSwitched = true;
+    switchRoute(task, null, true);
+  }
+}
+
+/* 换线路：停掉当前这条，从下一条（或指定线路）重新开始 */
+async function switchRoute(task, prefix, auto) {
+  if (!task) return false;
+  var settings = await settingsNow();
+  var order = await routesForFile(task.url, settings);
+  if (!order.length) return false;
+  var idx;
+  if (prefix) {
+    idx = 0;
+    order.forEach(function (r, i) { if (r.prefix === prefix) idx = i; });
+  } else {
+    idx = (Number(task.routeIdx) || 0) + 1;
+    if (idx >= order.length) idx = 0;
+  }
+  var dlId = task.downloadId;
+  if (dlId) {
+    activeIds.delete(dlId);          // 先摘掉，cancel 触发的 interrupted 就不会走失败重试
+    try { EXT.downloads.cancel(dlId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+  }
+  if (task.segmented) abortSeg(task);
+  task.downloadId = 0;
+  task.segmented = false;
+  if (task.blobUrl) { revokeBlob(task.blobUrl); task.blobUrl = ''; }
+  task.status = 'queued';
+  task.routeIdx = idx;
+  task.received = 0;
+  task.speed = 0;
+  task.slow = false;
+  task.slowSince = 0;
+  task._sp = null;
+  task.error = '';
+  task.autoSwitched = !!auto;
+  var r = order[idx];
+  if (r) task.route = r.name + (r.prefix ? '' : '（直连）');
+  persist();
+  updateBadge();
+  pump();
+  return true;
+}
+
+function cancelTask(task) {
+  if (!task) return;
+  var dlId = task.downloadId;
+  if (dlId) {
+    activeIds.delete(dlId);
+    try { EXT.downloads.cancel(dlId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+  }
+  if (task.segmented) abortSeg(task);
+  task.segmented = false;
+  task.downloadId = 0;
+  task.status = 'canceled';
+  task.error = '已取消';
+  task.speed = 0;
+  finishOne();
+}
+
+/* ---------------- 分片下载（多线程） ---------------- */
+
+var offCreating = null;
+
+async function hasOffscreen() {
+  try {
+    if (EXT.offscreen && EXT.offscreen.hasDocument) return await EXT.offscreen.hasDocument();
+    var ctxs = await EXT.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+    return !!(ctxs && ctxs.length);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function ensureOffscreen() {
+  if (!EXT.offscreen) return false;
+  if (await hasOffscreen()) return true;
+  if (!offCreating) {
+    offCreating = EXT.offscreen.createDocument({
+      url: 'src/off.html',
+      reasons: ['BLOBS'],
+      justification: '多线程分片下载后拼装成文件，再交给浏览器保存'
+    }).catch(function () {}).then(function () { offCreating = null; });
+  }
+  await offCreating;
+  return await hasOffscreen();
+}
+
+async function startSegmented(task, route, settings, order) {
+  try {
+    if (!(await ensureOffscreen())) return false;
+    task.segmented = true;
+    task.status = 'downloading';
+    task.received = 0;
+    task.speed = 0;
+    task.bestSpeed = 0;
+    task.boostCount = 0;
+    task.slow = false;
+    task._sp = null;
+    segTasks.set(task.id, task);
+    // 每片换一条线路：同一时刻问不同的镜像要数据，比在一条慢线路上挤快得多
+    var urls = [];
+    var pool = (order || []).filter(function (r) { return r.prefix === route.prefix; })
+      .concat((order || []).filter(function (r) { return r.prefix !== route.prefix; }));
+    pool.forEach(function (r) { urls.push(routeUrl(r, task.url)); });
+    if (!urls.length) urls = [routeUrl(route, task.url)];
+    segSend({
+      type: 'seg-start',
+      id: task.id,
+      url: urls[0],
+      urls: urls.slice(0, 6),
+      size: task.size || 0,
+      threads: Math.max(2, Math.min(6, settings.threads || 4))
+    });
+    persist();
+    return true;
+  } catch (e) {
+    task.segmented = false;
+    return false;
+  }
+}
+
+function segSend(payload) {
+  try {
+    EXT.runtime.sendMessage(Object.assign({ target: 'offscreen' }, payload),
+      function () { void EXT.runtime.lastError; });
+  } catch (e) {}
+}
+
+function abortSeg(task) {
+  segTasks.delete(task.id);
+  segSend({ type: 'seg-abort', id: task.id });
+}
+
+function revokeBlob(url) {
+  segSend({ type: 'seg-revoke', url: url });
+}
+
+function onSegProgress(m) {
+  var task = segTasks.get(m.id);
+  if (!task) return;
+  task.received = m.received || 0;
+  if (m.total) { task.total = m.total; if (!task.size) task.size = m.total; }
+  if (typeof m.speed === 'number' && m.speed > 0) {
+    task.speed = m.speed;
+    if (!task.bestSpeed || m.speed > task.bestSpeed) task.bestSpeed = m.speed;
+  }
+  maybeBoost(task);
+  judgeSlow(task);
+}
+
+async function onSegDone(m) {
+  var task = segTasks.get(m.id);
+  if (!task) { revokeBlob(m.url); return; }
+  segTasks.delete(m.id);
+  task.segmented = false;
+  task.blobUrl = m.url;
+  if (m.total) { task.total = m.total; task.size = task.size || m.total; }
+  try {
+    var id = await EXT.downloads.download({
+      url: m.url,
+      filename: task.path,
+      conflictAction: task.tries > 0 ? 'overwrite' : 'uniquify',
+      saveAs: false
+    });
+    task.downloadId = id;
+    task.received = task.total || task.size || task.received;
+    activeIds.set(id, task);
+    persist();
+  } catch (e) {
+    revokeBlob(m.url);
+    task.blobUrl = '';
+    task.segFailed = true;          // 这个文件以后走单连接，别反复折腾
+    task.status = 'queued';
+    task.received = 0;
+    task.error = '';
+    pump();
+  }
+}
+
+function onSegError(m) {
+  var task = segTasks.get(m.id);
+  if (!task) return;
+  segTasks.delete(m.id);
+  task.segmented = false;
+  task.segFailed = true;           // 镜像不支持 Range 之类，退回单连接
+  task.status = 'queued';
+  task.received = 0;
+  task.speed = 0;
+  task._sp = null;
+  task.error = '分片失败，改用单连接';
+  pump();
 }
 
 async function enqueue(items) {
@@ -353,6 +657,18 @@ async function startTask(task, settings) {
     task.route = route.name + (route.prefix ? '' : '（直连）');
     task.routePrefix = route.prefix;
     task.status = 'downloading';
+    task.slow = false;
+    task.slowSince = 0;
+    task._sp = null;
+    // 能分片就分片：多线程拉同一文件，小文件走浏览器单连接就好
+    var size = task.size || task.total || 0;
+    var segCap = (settings.segMaxMB || 128) * 1024 * 1024;
+    if (settings.segEnabled !== false && !task.segFailed && size > 1024 * 1024 && size <= segCap) {
+      if (await startSegmented(task, route, settings, order)) {
+        updateBadge();
+        return;
+      }
+    }
     var id = await EXT.downloads.download({
       url: routeUrl(route, task.url),
       filename: task.path,
@@ -389,6 +705,7 @@ function handleChange(delta) {
   if (!task) return;
   if (delta.bytesReceived) {
     task.received = delta.bytesReceived.current || 0;
+    sampleSpeed(task, task.received);
   }
   if (delta.totalBytes && delta.totalBytes.current > 0) {
     task.total = delta.totalBytes.current;
@@ -398,6 +715,10 @@ function handleChange(delta) {
     activeIds.delete(delta.id);
     task.status = 'done';
     task.received = task.total || task.size;
+    task.speed = 0;
+    task.slow = false;
+    task.downloadId = 0;
+    if (task.blobUrl) { revokeBlob(task.blobUrl); task.blobUrl = ''; }
     doneSince++;
     finishOne();
     return;
@@ -446,6 +767,7 @@ try {
 /* ---------------- 消息路由 ---------------- */
 
 onMessage(function (msg, sender, respond) {
+  if (msg && msg.target === 'offscreen') return false;   // 发给隐藏文档的，后台不处理
   (async function () {
     try {
       switch (msg.type) {
@@ -471,18 +793,50 @@ onMessage(function (msg, sender, respond) {
             tasks: tasks.slice(-50).map(function (t) {
               return {
                 id: t.id, name: t.name, path: t.path, size: t.size, received: t.received,
-                status: t.status, route: t.route, error: t.error
+                total: t.total, status: t.status, route: t.route, error: t.error,
+                speed: t.speed || 0, slow: !!t.slow, segmented: !!t.segmented,
+                boosting: !!t.boosting, boostCount: t.boostCount || 0,
+                routePrefix: t.routePrefix || ''
               };
             }),
             pending: pendingCount(),
             probe: probeCache ? { ts: probeCache.ts, list: probeCache.list.slice(0, 6) } : null
           });
           break;
+        case 'switch-route': {
+          var st = tasks.filter(function (x) { return x.id === msg.id; })[0];
+          respond({ ok: await switchRoute(st, msg.prefix || '', false) });
+          break;
+        }
+        case 'cancel-task': {
+          var ct = tasks.filter(function (x) { return x.id === msg.id; })[0];
+          cancelTask(ct);
+          respond({ ok: !!ct });
+          break;
+        }
+        case 'seg-progress':
+          onSegProgress(msg);
+          respond({ ok: true });
+          break;
+        case 'seg-done':
+          await onSegDone(msg);
+          respond({ ok: true });
+          break;
+        case 'seg-error':
+          onSegError(msg);
+          respond({ ok: true });
+          break;
         case 'cancel-all':
           tasks.forEach(function (t) {
             if (t.status === 'queued' || t.status === 'probing') { t.status = 'canceled'; t.error = '已取消'; }
-            if (t.status === 'downloading' && t.downloadId) {
-              try { EXT.downloads.cancel(t.downloadId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+            if (t.status === 'downloading') {
+              if (t.segmented) abortSeg(t);
+              if (t.downloadId) {
+                try { EXT.downloads.cancel(t.downloadId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+                t.downloadId = 0;
+              }
+              t.status = 'canceled';
+              t.error = '已取消';
             }
           });
           updateBadge();

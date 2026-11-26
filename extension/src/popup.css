@@ -124,7 +124,18 @@ body {
 
 /* 下载中的任务 */
 .task { padding: 8px 12px; border-bottom: 1px dashed #E6DCC6; }
-.task .tn { font-size: 11.5px; font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+.task .tn { font-size: 11.5px; font-family: ui-monospace, Menlo, Consolas, monospace; word-break: normal; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.task .tname { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.task .trt { font-size: 10px; color: var(--text2); background: #F1EAD8; border: 1px solid #E0D5BE; padding: 0 4px; white-space: nowrap; }
+.tflag { font-size: 9.5px; font-weight: 800; padding: 0 4px; border: 1px solid var(--ink); background: #EFE7D2; white-space: nowrap; }
+.tflag.ok { background: #B8E6C8; }
+.tflag.bad { background: #FFC9B4; }
+.tact { display: flex; gap: 12px; margin-top: 3px; }
+.tact .lnk { font-size: 10.5px; padding: 0; }
+.tact .lnk[disabled] { opacity: .5; text-decoration: none; }
+.tlast { font-size: 11px; padding: 7px 12px; border-bottom: 1px dashed #E6DCC6; }
+.tlast.ok { color: #1F6B3E; background: #EDF8F0; }
+.tlast.bad { color: #8A2A10; background: #FDEDE6; }
 .task .tb { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .bar { flex: 1; height: 9px; border: 2px solid var(--ink); background: #fff; position: relative; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--mint); }

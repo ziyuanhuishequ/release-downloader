@@ -63,7 +63,23 @@
     '.msg{padding:14px 12px;font-size:12.5px;color:#5B5F70;text-align:center;line-height:1.7}',
     '.msg b{color:#C63020}',
     '.tip{font-size:11px;color:#5B5F70;padding:0 2px}',
-    '.sk{padding:10px 12px;font-size:12.5px;color:#5B5F70}'
+    '.sk{padding:10px 12px;font-size:12.5px;color:#5B5F70}',
+    '.qs{border-bottom:2px solid #1A1E30;background:#F7F2E4;max-height:190px;overflow:auto}',
+    '.qhd{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:11.5px;font-weight:700;color:#5B5F70;border-bottom:1px dashed #E0D5BE}',
+    '.qhd .spd{margin-left:auto;color:#087458}',
+    '.q{padding:7px 10px;border-bottom:1px dashed #E6DCC6}',
+    '.q .qn{display:flex;align-items:center;gap:6px;font-size:11.5px;font-family:ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}',
+    '.q .qn .nmx{flex:1;min-width:0}',
+    '.q .rt2{font-size:10px;color:#5B5F70;background:#EFE7D2;border:1px solid #E0D5BE;padding:0 4px;white-space:nowrap}',
+    '.qflag{font-size:9.5px;font-weight:800;padding:0 4px;border:1px solid #1A1E30;background:#EFE7D2;white-space:nowrap}',
+    '.qflag.ok{background:#B8E6C8}',
+    '.qflag.bad{background:#FFC9B4}',
+    '.q .qb{display:flex;align-items:center;gap:8px;margin-top:4px}',
+    '.q .qbar{flex:1;height:9px;border:2px solid #1A1E30;background:#fff;overflow:hidden}',
+    '.q .qbar i{display:block;height:100%;background:#2ED3A5}',
+    '.q .qmeta{font-size:10.5px;color:#5B5F70;white-space:nowrap}',
+    '.q .qtact{display:flex;gap:12px;margin-top:3px}',
+    '.q .qtact .lk2{font-size:10.5px;color:#782814;cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font-family:inherit}'
   ].join('');
 
   function esc(s) {
@@ -158,6 +174,84 @@
     render();
   }
 
+  /* ---------- 下载队列 ---------- */
+
+  function queueHtml() {
+    var list = state.tasks || [];
+    var live = list.filter(function (t) {
+      return t.status === 'downloading' || t.status === 'probing' || t.status === 'queued';
+    });
+    if (!live.length) return '';
+    var spd = live.reduce(function (s, t) { return s + (t.speed || 0); }, 0);
+    var html = '<div class="qs"><div class="qhd">正在下载 ' + live.length + ' 个' +
+      (spd ? '<span class="spd">共 ' + fmtSpeed(spd) + '</span>' : '') + '</div>';
+    live.slice(0, 6).forEach(function (t) {
+      var total = t.total || t.size || 0;
+      var pct = total > 0 ? Math.min(100, Math.round(t.received / total * 100)) : 0;
+      var meta;
+      if (t.status === 'probing') meta = '选线中…';
+      else if (t.status === 'queued') meta = '排队中';
+      else if (t.boosting) meta = '自动提速中…';
+      else {
+        meta = pct + '%';
+        if (t.speed) meta += ' · ' + fmtSpeed(t.speed);
+        var eta = (t.speed && total) ? fmtEta((total - t.received) / t.speed) : '';
+        if (eta) meta += ' · 剩 ' + eta;
+      }
+      var flag = '';
+      if (t.slow && t.status === 'downloading') flag = '<span class="qflag bad">速度慢</span>';
+      else if (t.boosting) flag = '<span class="qflag ok">提速</span>';
+      else if (t.segmented && t.status === 'downloading') flag = '<span class="qflag">多线程</span>';
+      html += '<div class="q">' +
+        '<div class="qn"><span class="nmx">' + esc(t.name) + '</span>' +
+        (t.route ? '<span class="rt2">' + esc(t.route) + '</span>' : '') + flag + '</div>' +
+        '<div class="qb"><div class="qbar"><i style="width:' + pct + '%"></i></div>' +
+        '<span class="qmeta">' + esc(meta) + '</span></div>' +
+        (t.status === 'downloading' || t.status === 'queued'
+          ? '<div class="qtact"><button class="lk2" data-sw="' + esc(t.id) + '">换线路</button>' +
+            '<button class="lk2" data-cx="' + esc(t.id) + '">取消</button></div>'
+          : '') +
+        '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function wireQueue(root) {
+    root.querySelectorAll('[data-sw]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        b.textContent = '换线中…';
+        bgSend('switch-route', { id: b.getAttribute('data-sw') });
+      });
+    });
+    root.querySelectorAll('[data-cx]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        bgSend('cancel-task', { id: b.getAttribute('data-cx') });
+      });
+    });
+  }
+
+  function startPoll() {
+    if (state.timer) return;
+    state.timer = setInterval(async function () {
+      var st = await bgSend('state', {});
+      if (!st || !st.tasks) return;
+      state.tasks = st.tasks;
+      var root = state.host && state.host.shadowRoot;
+      var q = root && root.getElementById('qwrap');
+      if (!q) return;
+      var next = queueHtml();
+      if (q.innerHTML !== next) {
+        q.innerHTML = next;
+        wireQueue(root);
+      }
+    }, 1000);
+  }
+
+  function stopPoll() {
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  }
+
   function render() {
     if (!state.host) return;
     var root = state.host.shadowRoot;
@@ -224,6 +318,7 @@
           '<div class="bar">' + filters +
             '<span class="cnt">' + picked.length + '/' + state.assets.length + ' 已选</span>' +
           '</div>' +
+          '<div id="qwrap">' + queueHtml() + '</div>' +
           body +
           '<div class="ft">' +
             '<div class="rt">' + routeHtml + '</div>' +
@@ -247,11 +342,17 @@
   }
 
   function wire(root) {
+    wireQueue(root);
     var fab = root.getElementById('fab');
-    if (fab) fab.addEventListener('click', function () { state.open = true; render(); if (!state.assets.length && !state.loading) loadAssets(); else if (!state.probe) probeBest(); });
+    if (fab) fab.addEventListener('click', function () {
+      state.open = true;
+      render();
+      startPoll();
+      if (!state.assets.length && !state.loading) loadAssets(); else if (!state.probe) probeBest();
+    });
 
     var close = root.getElementById('close');
-    if (close) close.addEventListener('click', function () { state.open = false; render(); });
+    if (close) close.addEventListener('click', function () { state.open = false; stopPoll(); render(); });
 
     root.querySelectorAll('[data-filter]').forEach(function (el) {
       el.addEventListener('click', function () {
@@ -295,9 +396,12 @@
         return;
       }
       var extra = res.blocked ? '（' + res.blocked + ' 个已在队列）' : '';
-      go.textContent = '已加入 ' + res.added + ' 个，去看浏览器下载列表 ' + extra;
-      state.open = false;
-      setTimeout(render, 1200);
+      go.textContent = '已加入 ' + res.added + ' 个' + extra;
+      // 面板不关：下载进度就显示在上面的队列里
+      startPoll();
+      var st0 = await bgSend('state', {});
+      if (st0 && st0.tasks) state.tasks = st0.tasks;
+      setTimeout(function () { render(); startPoll(); }, 400);
     });
   }
 
