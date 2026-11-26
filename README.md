@@ -11,7 +11,7 @@
 | Windows 桌面版（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.5.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.5.exe) |
 | Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip) |
 | Firefox | [`GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip) |
-| 源码（Rust，含编译说明） | [`GitHub-Release-Downloader-Source-v1.6.5.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Source-v1.6.5.zip) |
+
 
 上面四个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
 点文件名即可直接下载。扩展的每个历史版本另有单独 Release（如
