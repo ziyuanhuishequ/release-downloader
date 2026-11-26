@@ -200,7 +200,7 @@
         var pct = total > 0 ? Math.min(100, Math.round(t.received / total * 100)) : 0;
         var eta = (t.speed && total) ? fmtEta((total - t.received) / t.speed) : '';
         var meta;
-        if (t.status === 'paused') meta = '已暂停 · ' + pct + '%';
+        if (t.status === 'paused') meta = pct + '%';   // 「已暂停」由角标显示，这里不重复
         else if (t.status === 'probing') meta = '选线中…';
         else if (t.status === 'queued') meta = '排队中';
         else if (t.boosting) meta = '自动提速中…';
