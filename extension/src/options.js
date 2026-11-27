@@ -171,6 +171,11 @@
       var pb = pmap[r.prefix];
       if (pb && pb.ok && pb.bps > best) best = pb.bps;
     });
+    /* 冷却剩多久要写清楚，只写「冷却中」用户会以为是自己用太多被限流了 */
+    function coolTxt(until) {
+      var left = Math.ceil(((until || 0) - Date.now()) / 60000);
+      return left > 0 ? '冷却 ' + left + ' 分' : '冷却中';
+    }
     var rows = poolState.routes.map(function (r) {
       var pb = pmap[r.prefix];
       var txt;
@@ -192,7 +197,7 @@
       return '<div class="rline ' + cls + (star ? ' pref' : '') + '" data-prefix="' + esc(prefKey(r.prefix)) + '">' +
         '<span class="rn">' + (star ? '★ ' : '') + esc(r.name || '直连') + '</span>' +
         '<span class="bar2"><i style="width:' + w + '%"></i></span>' +
-        '<span class="rs">' + esc(r.cooling ? '冷却中' : txt) + '</span>' +
+        '<span class="rs">' + esc(r.cooling ? coolTxt(r.coolUntil) : txt) + '</span>' +
         '<span class="rk">' + (okN || failN ? okN + '成/' + failN + '败' : '—') + '</span>' +
         '</div>';
     }).join('') || '<div class="rline"><span class="rn">线路池是空的，点「更新线路池」重新拉一次</span></div>';

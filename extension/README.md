@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.4.5-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.4.5-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 

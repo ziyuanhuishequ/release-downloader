@@ -16,7 +16,7 @@ var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.5',
+  version: '1.4.6',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 

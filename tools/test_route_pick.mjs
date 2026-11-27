@@ -171,5 +171,46 @@ console.log('\n[6] 手动固定线路优先');
   ok('用户固定直连时直连第一', order[0].prefix === DIRECT, order[0].name);
 }
 
+/* ---------- 7. 冷却与历史统计 ---------- */
+console.log('\n[7] 冷却时长与历史统计');
+{
+  const tick = () => new Promise((r) => globalThis.setTimeout(r, 30));
+
+  // 7.1 测速失败不该记进「历史失败」
+  store.routeStats = {}; store.routeStatsVer = 2; ctx.routeStats = {};
+  ctx.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await ctx.probeRoutes('https://github.com/a/b/releases/download/v1/p.bin', 'pick-1', true);
+  const st = await ctx.loadStats();
+  ok('测速失败不再写进历史', Object.keys(st).length === 0, JSON.stringify(st));
+
+  // 7.2 真下载失败：第一次不冷却，连续两次才冷却 5 分钟
+  const P = 'https://gh-proxy.com/';
+  ctx.badUntil.delete(P);
+  ctx.routeStats[P] = { ok: 0, fail: 0, sumBps: 0 };
+  ctx.noteRoute(P, false, 0); await tick();
+  ok('失败 1 次不冷却（偶发抖动不锁线路）', !ctx.badUntil.get(P), String(ctx.badUntil.get(P) || 0));
+  ctx.noteRoute(P, false, 0); await tick();
+  const left1 = (ctx.badUntil.get(P) - Date.now()) / 60000;
+  ok('连续失败 2 次冷却 5 分钟', left1 > 4.4 && left1 <= 5.1, left1.toFixed(2) + ' 分');
+
+  // 7.3 失败越多冷却越久，但最多 10 分钟
+  ctx.routeStats[P] = { ok: 0, fail: 4, sumBps: 0, failStreak: 4 };
+  ctx.noteRoute(P, false, 0); await tick();
+  const left2 = (ctx.badUntil.get(P) - Date.now()) / 60000;
+  ok('冷却封顶 10 分钟', left2 <= 10.1, left2.toFixed(2) + ' 分');
+
+  // 7.4 成功一次立刻解除冷却
+  ctx.noteRoute(P, true, 300 * 1024); await tick();
+  ok('成功一次即解除冷却', !ctx.badUntil.get(P), String(ctx.badUntil.get(P) || 0));
+
+  // 7.5 旧版被污染的数据自动清一次（「3败」其实是 3 次测速）
+  store.routeStats = { 'https://ghfast.top/': { ok: 0, fail: 3, sumBps: 0 } };
+  delete store.routeStatsVer;
+  ctx.routeStats = null;
+  const migrated = await ctx.loadStats();
+  ok('旧统计自动清空', Object.keys(migrated).length === 0, JSON.stringify(migrated));
+  ok('清空后写入新版本号', store.routeStatsVer === 2, String(store.routeStatsVer));
+}
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

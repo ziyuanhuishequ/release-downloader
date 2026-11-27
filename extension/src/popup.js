@@ -116,6 +116,12 @@
     st.prefer = (res && res.prefer) || '';
   }
 
+  /* 冷却剩余分钟：让用户知道只是暂时跳过，不是被限流 */
+  function coolTxt(until) {
+    var left = Math.ceil(((until || 0) - Date.now()) / 60000);
+    return left > 0 ? '冷却 ' + left + ' 分' : '冷却中';
+  }
+
   function renderRouteList() {
     var box = $('rlist');
     if (!box) return;
@@ -144,7 +150,7 @@
       return '<div class="rline ' + cls + (star ? ' pref' : '') + '" data-prefix="' + esc(prefKey(r.prefix)) +
         '" title="点一下固定用这条线路，再点取消">' +
         '<span class="rn">' + (star ? '★ ' : '') + esc(r.name || '直连') + '</span>' +
-        '<span class="rs">' + esc(r.cooling ? '冷却中' : speed) + '</span></div>';
+        '<span class="rs">' + esc(r.cooling ? coolTxt(r.coolUntil) : speed) + '</span></div>';
     }).join('') || '<div class="rline"><span class="rn">线路池还没加载，点下面「更新线路池」</span></div>';
     var pool = st.pool;
     var poolTxt = pool

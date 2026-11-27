@@ -236,11 +236,20 @@ async function listAssets(repo, tag) {
 
 var routeStats = null;        // prefix -> {ok, fail, sumBps, last}
 var statsDirty = false;
+var STATS_VER = 2;            // 1 = 旧版（把「测速失败」也算成一次失败，数据被污染）
 
 async function loadStats() {
   if (routeStats) return routeStats;
   try {
-    routeStats = (await EXT.storage.local.get('routeStats')).routeStats || {};
+    var got = await EXT.storage.local.get(['routeStats', 'routeStatsVer']);
+    if ((got.routeStatsVer || 0) < STATS_VER) {
+      /* 旧版每次测速都会给连不上的线路记一次「失败」，于是「3败」其实是 3 次测速，
+       * 并不是用户下载失败 3 次，还会把线路一路冷却下去。这里清一次，重新开始记。 */
+      routeStats = {};
+      try { await EXT.storage.local.set({ routeStats: {}, routeStatsVer: STATS_VER }); } catch (e) {}
+      return routeStats;
+    }
+    routeStats = got.routeStats || {};
   } catch (e) {
     routeStats = {};
   }
@@ -266,9 +275,9 @@ function noteRoute(prefix, ok, bps) {
     } else {
       e.fail++;
       e.failStreak = (e.failStreak || 0) + 1;
-      // 连挂两次就先别用它，10 分钟后再给机会（比原来 3 分钟更容易筛掉死线路）
+      // 真下载连挂两次才冷却：5 分钟起，最多 10 分钟（不会因为几次抖动就把线路锁半天）
       if (e.failStreak >= 2) {
-        var ms = Math.min(30 * 60 * 1000, 5 * 60 * 1000 * Math.pow(2, e.failStreak - 2));
+        var ms = Math.min(10 * 60 * 1000, 5 * 60 * 1000 * Math.pow(2, e.failStreak - 2));
         badUntil.set(prefix, Date.now() + ms);
       }
     }
@@ -726,11 +735,10 @@ async function probeRoutes(probeUrl, cacheKey, force) {
   });
   var okCount = list.filter(function (r) { return r.ok; }).length;
   var blocked = list.filter(function (r) { return !r.ok && r.err === 'cors'; }).length;
-  // 测速结果顺手记进线路健康度：跨文件复用，下次没测速也知道该先试哪条
-  list.forEach(function (r) {
-    if (r.ok) noteRoute(r.prefix, true, r.bps);
-    else if (r.err !== 'cors') noteRoute(r.prefix, false, 0);   // 跨域受限不代表线路差，不扣分
-  });
+  /* 测速结果只用于这一次的排序，不再写进「历史成功率」：
+   * 测速失败不等于这条线路下载会失败（比如域名被浏览器拦、或者只是这次超时），
+   * 记进去会让「0成/3败」这种数字看起来像用户下载失败了 3 次，还会把线路一路冷却掉。
+   * 历史成绩只由真实下载结果（noteRoute）来记。 */
   var out = { key: key, ts: Date.now(), list: list, probeUrl: probeUrl, okCount: okCount, blocked: blocked };
   probeCache = out;
   try { await EXT.storage.local.set({ routeCache: out }); } catch (e) {}
@@ -1711,7 +1719,8 @@ onMessage(function (msg, sender, respond) {
                 ok: e.ok || 0,
                 fail: e.fail || 0,
                 score: Math.round(routeScore(stats0, r.prefix)),
-                cooling: (badUntil.get(r.prefix) || 0) > now0
+                cooling: (badUntil.get(r.prefix) || 0) > now0,
+                coolUntil: badUntil.get(r.prefix) || 0,
               };
             }),
             pool: POOL_INFO,
