@@ -15,12 +15,12 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.7";
+const APP_VERSION: &str = "1.6.8";
 /// 检测更新要查的仓库
 const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
 /// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
 const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.7";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.8";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -673,6 +673,51 @@ fn agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
+/// GitHub API 的几条通路：直连优先，被墙或超时就换镜像。
+///
+/// `api.github.com` 在国内和 `github.com` 一样会被污染。只用直连的话，
+/// 「粘贴仓库地址 → 扫描」这个核心功能在墙内直接不可用，只能报一句网络错误。
+/// 实测 gh-proxy.org / gh-proxy.com 能完整代理 API 并回 JSON，所以这里和下载一样排了备胎。
+const API_BASES: [&str; 3] = [
+    "https://api.github.com",
+    "https://gh-proxy.org/https://api.github.com",
+    "https://gh-proxy.com/https://api.github.com",
+];
+
+/// 依次尝试各条通路取 JSON。
+///
+/// - 401 / 404 是请求本身的问题，换通道也一样，直接返回
+/// - 403 多半是「这个 IP 的匿名额度用完了」，换镜像的 IP 往往还能用，所以继续试
+/// - 5xx、连接失败、返回的不是 JSON（镜像给了错误页）都换下一条
+fn api_json(ag: &ureq::Agent, path: &str, token: &str) -> Result<Value, String> {
+    let mut last = String::from("网络错误");
+    for base in API_BASES {
+        let url = format!("{}{}", base, path);
+        let mut req = ag.get(&url).set("Accept", "application/vnd.github+json");
+        if !token.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", token));
+        }
+        match req.call() {
+            Ok(r) => match r.into_json::<Value>() {
+                Ok(v) => return Ok(v),
+                Err(e) => last = format!("解析失败 —— {}", e),
+            },
+            Err(ureq::Error::Status(401, _)) => return Err("Token 无效或已过期".to_string()),
+            Err(ureq::Error::Status(404, _)) => {
+                return Err("仓库不存在，或为私有仓库（需填 Token）".to_string())
+            }
+            Err(ureq::Error::Status(403, _)) => {
+                last = "访问被拒（403），可能触发频率限制，填 Token 可提高额度".to_string()
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                last = format!("HTTP {} —— {}", code, http_hint(code))
+            }
+            Err(e) => last = format!("网络错误 —— {}", e),
+        }
+    }
+    Err(format!("{}（直连和镜像都试过了）", last))
+}
+
 /// 下载专用的 agent。
 ///
 /// 这里**不能**用 `.timeout(整体时限)`：那是「从发请求到读完 body」的总时长，
@@ -772,42 +817,11 @@ fn scan_repos(
     let mut errors: Vec<String> = Vec::new();
 
     for repo in repos {
-        let url = format!(
-            "https://api.github.com/repos/{}/releases?per_page=10&page=1",
-            repo
-        );
-        let mut req = ag.get(&url).set("Accept", "application/vnd.github+json");
-        if !token.is_empty() {
-            req = req.set("Authorization", &format!("Bearer {}", token));
-        }
-        let resp = match req.call() {
-            Ok(r) => r,
-            Err(ureq::Error::Status(404, _)) => {
-                errors.push(format!("{}：仓库不存在，或为私有仓库（需填 Token）", repo));
-                continue;
-            }
-            Err(ureq::Error::Status(403, _)) => {
-                errors.push(format!(
-                    "{}：访问被拒（403），可能触发频率限制，填 Token 可提高额度",
-                    repo
-                ));
-                continue;
-            }
-            Err(ureq::Error::Status(code, _)) => {
-                // 504 之类的网关错误要说明白，否则用户只会看到一串数字
-                errors.push(format!("{}：HTTP {} —— {}", repo, code, http_hint(code)));
-                continue;
-            }
-            Err(e) => {
-                errors.push(format!("{}：网络错误 —— {}", repo, e));
-                continue;
-            }
-        };
-
-        let value: Value = match resp.into_json() {
+        let path = format!("/repos/{}/releases?per_page=10&page=1", repo);
+        let value: Value = match api_json(&ag, &path, token) {
             Ok(v) => v,
-            Err(e) => {
-                errors.push(format!("{}：解析失败 —— {}", repo, e));
+            Err(msg) => {
+                errors.push(format!("{}：{}", repo, msg));
                 continue;
             }
         };
@@ -3417,22 +3431,7 @@ fn parse_ver(s: &str) -> Option<(u32, u32, u32)> {
 /// 不能用 /releases/latest：那个会返回最近发布的那个，可能是扩展版。
 fn fetch_latest_desktop() -> Result<(String, String), String> {
     let ag = agent(20);
-    let url = format!(
-        "https://api.github.com/repos/{}/releases?per_page=30",
-        REPO_SLUG
-    );
-    let resp = ag
-        .get(&url)
-        .set("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(403, _) => "请求太频繁（403），过一会儿再试".to_string(),
-            ureq::Error::Status(code, _) => format!("HTTP {}", code),
-            e => format!("网络错误：{}", e),
-        })?;
-    let v: Value = resp
-        .into_json()
-        .map_err(|e| format!("解析失败：{}", e))?;
+    let v: Value = api_json(&ag, &format!("/repos/{}/releases?per_page=30", REPO_SLUG), "")?;
     let arr = v.as_array().ok_or_else(|| "返回格式不对".to_string())?;
     let mut best: Option<((u32, u32, u32), String, String)> = None;
     for r in arr {
