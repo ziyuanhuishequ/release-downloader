@@ -6,7 +6,7 @@ var EXT = (typeof browser !== 'undefined' && browser && browser.runtime) ? brows
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.2',
+  version: '1.4.3',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -514,28 +514,102 @@ async function saveSettings(patch) {
 
 /* ---------- 与后台通信 ---------- */
 
-function bgSend(type, payload) {
+/* Chrome 用回调风格（sendMessage 返回 undefined），Firefox 的 browser.* 只认 Promise、
+ * 传进去的回调会被当成 options 忽略。所以两种都得接住，否则在 Firefox 里每次调用都石沉大海。 */
+var BG_RETRY_RE = /Receiving end does not exist|Could not establish connection|message port closed|Extension context invalidated|background service worker/i;
+
+function bgSendOnce(msg, timeoutMs) {
   return new Promise(function (resolve) {
-    var msg = Object.assign({ type: type }, payload || {});
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      resolve({ error: '__timeout__' });
+    }, timeoutMs || 20000);
+
+    function fin(v) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(v);
+    }
+
+    var p;
     try {
-      EXT.runtime.sendMessage(msg, function (res) {
+      p = EXT.runtime.sendMessage(msg, function (res) {
         if (EXT.runtime.lastError) {
-          resolve({ error: EXT.runtime.lastError.message });
+          fin({ error: EXT.runtime.lastError.message });
           return;
         }
-        resolve(res || {});
+        fin(res || {});
       });
     } catch (e) {
-      resolve({ error: String(e && e.message || e) });
+      fin({ error: String((e && e.message) || e) });
+      return;
+    }
+    // Firefox：上面的回调不会执行，返回的是 Promise
+    if (p && typeof p.then === 'function') {
+      p.then(function (res) { fin(res || {}); },
+        function (e) { fin({ error: String((e && e.message) || e) }); });
     }
   });
 }
 
-/* 事件订阅兼容层：Chrome/Firefox 都支持 onX.addListener */
-function onMessage(handler) {
+/* 后台刚被浏览器唤醒、或扩展刚重载时，前一两百毫秒发消息会报「没有接收端」。
+ * 这类错误一律重试；业务错误（404、镜像全挂）不重试，避免重复提交。 */
+function bgSend(type, payload) {
+  var msg = Object.assign({ type: type }, payload || {});
+  return (async function () {
+    var res = null;
+    for (var i = 0; i < 4; i++) {
+      res = await bgSendOnce(msg, i === 0 ? 15000 : 8000);
+      if (!res || !res.error) return res || {};
+      if (!BG_RETRY_RE.test(res.error)) return res;
+      await new Promise(function (r) { setTimeout(r, 150 + i * 400); });
+    }
+    // 还是连不上：再单独探一下后台是不是真的没起来，好给出准确的下一步
+    var ping = await bgSendOnce({ type: 'ping' }, 3000);
+    if (ping && !ping.error) {
+      return { error: '后台在线，但这条请求没有响应。请关掉这个窗口重新打开；如果一直这样，点「设置」把版本号发我。' };
+    }
+    return {
+      error: EXT_MANAGER === 'about:debugging'
+        ? '扩展后台没有启动。请到 about:debugging#/runtime/this-firefox 点「重新载入」，再重开这个窗口。'
+        : '扩展后台没有启动。请到扩展管理页点本扩展的「重新加载」，再重开这个窗口。'
+    };
+  })();
+}
+
+/* 各浏览器的扩展管理页地址，报错时直接告诉用户去哪儿点「重新加载」 */
+var EXT_MANAGER = (typeof browser !== 'undefined' && browser && browser.runtime) ? 'about:debugging' : 'chrome://extensions';
+
+/* 判断一条错误是不是「后台没起来/连不上」，这类错误要给出重载扩展的指引，
+ * 而不是像业务错误那样让用户去查仓库地址。 */
+function isBgDownError(msg) {
+  return /后台没有启动|后台在线|重新加载|重新载入|Receiving end|Could not establish|message port closed|__timeout__/i.test(String(msg || ''));
+}
+
+/* 事件订阅兼容层：
+ * Chrome 回调风格里必须「同步返回 true」才允许稍后 respond；
+ * Firefox 更严格，返回 false/undefined 会立刻关掉端口，后台就永远答不上话。
+ * keepAlive=true 用于后台：只要不是明确「这条不是给我的」，都把端口留着。 */
+function onMessage(handler, keepAlive) {
   EXT.runtime.onMessage.addListener(function (msg, sender, respond) {
-    var ret = handler(msg, sender, respond);
-    if (ret === true) return true;
+    var replied = false;
+    function reply(v) {
+      if (replied) return;          // 重复 respond 会抛「already responded」，直接吞掉
+      replied = true;
+      try { respond(v); } catch (e) {}
+    }
+    var ret;
+    try {
+      ret = handler(msg, sender, reply);
+    } catch (e) {
+      reply({ error: String((e && e.message) || e) });
+      return false;
+    }
+    if (ret === false) return false;          // 明确表示「不是发给我的」，交给别的监听器
+    if (ret === true || keepAlive) return true;
     return false;
   });
 }

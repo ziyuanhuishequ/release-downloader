@@ -143,7 +143,9 @@ def main():
     out_dir = os.path.join(ROOT, "浏览器扩展")
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir, ignore_errors=True)
-    shutil.copytree(HERE, out_dir, ignore=shutil.ignore_patterns(
+    # 目录被资源管理器/杀毒软件占用时 rmtree 会静默失败，这里允许覆盖写入，
+    # 否则整个打包流程会在「复制目录」这一步报 FileExistsError（zip 其实已经好了）。
+    shutil.copytree(HERE, out_dir, dirs_exist_ok=True, ignore=shutil.ignore_patterns(
         "screenshots", "__pycache__", "build.py", "make_icons.py", "README.md", "*.zip"))
     open(os.path.join(out_dir, "安装说明.txt"), "w", encoding="utf-8", newline="\r\n").write(chrome_note)
     print("目录：浏览器扩展/")

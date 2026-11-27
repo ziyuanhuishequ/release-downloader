@@ -1,7 +1,23 @@
 /* 后台：GitHub API、线路测速、下载队列、中断自动换线
  * MV3 Service Worker（Firefox 走 background.scripts，同一份代码）。
  */
-importScripts('common.js');
+/* Chrome MV3 的 Service Worker 要自己引入公共脚本；
+ * Firefox 走 background.scripts，manifest 里已经把 common.js 排在前面，
+ * 而且 Firefox 里没有 importScripts —— 无条件调用会让整个后台脚本在顶层抛错，
+ * 表现就是点任何按钮都报「Could not establish connection. Receiving end does not exist.」 */
+if (typeof importScripts === 'function' && typeof APP_INFO === 'undefined') {
+  importScripts('common.js');
+}
+
+/* 最先注册的探活通道：只要后台脚本被执行到，这里的监听器就已经在，
+ * popup 至少能拿到明确答复（在线/版本），不会卡在「没有接收端」上。 */
+try {
+  EXT.runtime.onMessage.addListener(function (msg, sender, respond) {
+    if (!msg || msg.type !== 'ping') return false;
+    respond({ ok: true, ver: (typeof APP_INFO !== 'undefined' ? APP_INFO.version : '') });
+    return false;
+  });
+} catch (e) {}
 
 var tasks = [];              // 全部任务（含已完成，最多保留 50 条）
 var activeIds = new Map();   // downloadId -> task
@@ -1265,7 +1281,12 @@ function notifyAutoDownload(gh) {
       var t = tabs && tabs[0];
       if (!t || !t.id) return;
       try {
-        EXT.tabs.sendMessage(t.id, { type: 'open-panel', auto: gh }, function () { void EXT.runtime.lastError; });
+        /* Firefox 的 browser.tabs.sendMessage 只返回 Promise，第三个回调参数会被忽略，
+         * 这里统一按返回值处理，两种浏览器都不会漏掉异常。 */
+        try {
+          var ps = EXT.tabs.sendMessage(t.id, { type: 'open-panel', auto: gh });
+          if (ps && ps.catch) ps.catch(function () {});
+        } catch (e) {}
       } catch (e) {}
     });
   } catch (e) {}
@@ -1802,7 +1823,10 @@ try {
       });
     }
     if (info.menuItemId === 'ghdl-page' && tab && tab.id) {
-      try { EXT.tabs.sendMessage(tab.id, { type: 'open-panel' }, function () { void EXT.runtime.lastError; }); } catch (e) {}
+      try {
+        var ps2 = EXT.tabs.sendMessage(tab.id, { type: 'open-panel' });
+        if (ps2 && ps2.catch) ps2.catch(function () {});
+      } catch (e) {}
     }
   });
 } catch (e) {}

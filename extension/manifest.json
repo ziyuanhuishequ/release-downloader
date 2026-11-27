@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GitHub Release 下载助手",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "在 GitHub 发布页一键勾选资源、自动测速选最快镜像、按仓库版本归档下载；内置国内镜像和多通道 API，没梯子也能打开 GitHub、扫描仓库。",
   "minimum_chrome_version": "109",
   "icons": {

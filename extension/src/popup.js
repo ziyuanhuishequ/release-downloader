@@ -302,9 +302,14 @@
     }
 
     if (st.error) {
-      html += '<div id="assetWrap"><div class="msg"><b>' + esc(st.error) + '</b>检查仓库地址是否正确；私有仓库需要在设置里填 GitHub Token。' +
-        '<br><span class="tiny2">直连和镜像都试过了。仍然不行的话，多半是仓库名写错或这个仓库确实不存在。</span></div></div>';
+      var bgDown = typeof isBgDownError === 'function' && isBgDownError(st.error);
+      html += bgDown
+        ? '<div id="assetWrap"><div class="msg"><b>' + esc(st.error) + '</b>' +
+          '<br><span class="tiny2">这不是仓库名的问题：扩展的后台脚本没跑起来，所以读不了 Release 列表。</span></div></div>'
+        : '<div id="assetWrap"><div class="msg"><b>' + esc(st.error) + '</b>检查仓库地址是否正确；私有仓库需要在设置里填 GitHub Token。' +
+          '<br><span class="tiny2">直连和镜像都试过了。仍然不行的话，多半是仓库名写错或这个仓库确实不存在。</span></div></div>';
       bodyEl.innerHTML = html;
+      if (bgDown) showBgBanner();
       return;
     }
 
@@ -600,6 +605,32 @@
     }
   }
 
+  /* 后台连不上时在顶上挂一条红色说明：用户至少知道该去哪儿点「重新加载」，
+   * 而不是看着每个按钮都弹一句英文的 Receiving end does not exist。 */
+  function showBgBanner(detail) {
+    if (document.getElementById('bgBanner')) return;
+    var firefox = typeof EXT_MANAGER === 'string' && EXT_MANAGER.indexOf('debugging') >= 0;
+    var where = firefox ? 'about:debugging' : 'chrome://extensions';
+    var verb = firefox ? '重新载入' : '重新加载';
+    var d = document.createElement('div');
+    d.id = 'bgBanner';
+    d.className = 'bgbanner';
+    d.innerHTML = '<b>扩展后台没有启动，按钮点不动就是这个原因</b>' +
+      '<div class="bgfix"><span>' + (detail ? esc(detail) : '') +
+      '到 ' + where + ' 点「' + verb + '」即可</span>' +
+      '<button id="bgRetry">重试</button></div>';
+    document.body.insertBefore(d, document.body.firstChild);
+    d.querySelector('#bgRetry').onclick = function () { location.reload(); };
+  }
+
+  /* 打开弹窗先探一下后台在不在（1.5 秒够唤醒冷启动的 Service Worker） */
+  async function checkBg() {
+    var p = await bgSendOnce({ type: 'ping' }, 3000);
+    if (p && !p.error) return true;
+    showBgBanner('');
+    return false;
+  }
+
   async function initBoost() {
     var res = await bgSend('boost-state');
     paintBoost(res);
@@ -622,6 +653,7 @@
     if (res && res.error) {
       tip.className = 'bt2 bad';
       tip.textContent = res.error;
+      if (typeof isBgDownError === 'function' && isBgDownError(res.error)) showBgBanner();
       return;
     }
     paintBoost(res);
@@ -645,7 +677,8 @@
     $('repo').addEventListener('keydown', function (e) { if (e.key === 'Enter') scan(); });
     $('btnOptions').onclick = function () { bgSend('open-options'); };
     $('btnBoost').onclick = toggleBoost;
-    initBoost();
+    // 先确认后台在不在：不在就直接挂提示，也不再去探测镜像白等
+    checkBg().then(function (ok) { if (ok) initBoost(); });
     $('btnAll').onclick = function () {
       var list = visibleAssets();
       var allOn = list.every(function (a) { return st.picked[a.name]; });
