@@ -44,3 +44,6 @@ Thumbs.db
 /_shot_*.png
 /_gh_*.png
 /_app_shot.png
+/_api_push.py
+/_body_*.md
+/_rel.json
