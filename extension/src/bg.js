@@ -60,6 +60,9 @@ function markDownloaded(task) {
 
 var SLOW_JUDGE_MS = 9000;    // 速度一直上不去，持续这么久就标记「慢」
 var AUTO_SWITCH_MS = 16000;  // 而且几乎没下多少，就自动换一条线重来
+var FAST_SWITCH_MS = 5500;   // 一上来就慢得离谱（几十 KB/s）：先给 5.5 秒，不行立刻换线
+var MAX_ROUTE_TRIES = 6;     // 单个任务最多自动换 6 次线路，别在 20 条死线里无限绕
+var ROUTE_GOOD_BPS = 96 * 1024;   // 实测 ≥96KB/s 才算「快的线路」，低于它的要排到「测不出速度」的后面
 
 /* 事件回调里用缓存，避免每次 onChanged 都读一遍 storage */
 async function settingsNow() {
@@ -642,6 +645,26 @@ function cacheKeyOf(url) {
   return p ? p.owner + '/' + p.repo + '@' + p.tag : url;
 }
 
+/* fetch 被拦时只会丢一个 TypeError，光凭它分不清两种情况：
+ *   ① 镜像没开跨域 —— 只是浏览器不让我们读响应，downloads 下载完全没问题；
+ *   ② 域名/网络真不通 —— 下载也一定失败。
+ * 用 no-cors 再问一次就能区分：能拿到响应说明网络可达（①），仍失败才是②。
+ * 这一步很关键：之前把②也当成①，还让「直连 518B/s」抢在所有镜像前面，
+ * 结果一直在最慢的那条线路上硬爬。 */
+async function reachableNoCors(url, timeoutMs) {
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, timeoutMs || 3000);
+  try {
+    await fetch(url, { mode: 'no-cors', cache: 'no-store', redirect: 'follow', signal: ctrl.signal });
+    try { ctrl.abort(); } catch (e) {}    // 只确认可达，别把整个文件拖下来
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function probeOne(route, fileUrl, timeoutMs) {
   var ctrl = new AbortController();
   var timer = setTimeout(function () { ctrl.abort(); }, timeoutMs || MIRROR_TIMEOUT_MS);
@@ -668,9 +691,10 @@ async function probeOne(route, fileUrl, timeoutMs) {
     return { ok: true, code: res.status, bytes: buf.byteLength, ms: Math.round(ttfb), bps: Math.round(buf.byteLength / dt) };
   } catch (e) {
     var nm = (e && e.name) || '';
-    // AbortError = 超时；TypeError = 被浏览器拦下（多为镜像没开 CORS），两者性质不同
-    var kind = nm === 'AbortError' ? 'timeout' : 'cors';
-    return { ok: false, err: kind, ms: Math.round(performance.now() - t0) };
+    // AbortError = 超时；TypeError = 可能是跨域被拦，也可能压根连不上，再确认一次
+    if (nm === 'AbortError') return { ok: false, err: 'timeout', ms: Math.round(performance.now() - t0) };
+    var reach = await reachableNoCors(routeUrl(route, fileUrl), 2500);
+    return { ok: false, err: reach ? 'cors' : 'dead', ms: Math.round(performance.now() - t0) };
   } finally {
     clearTimeout(timer);
   }
@@ -722,6 +746,21 @@ function ttlOf(cached) {
 }
 
 /* 给某个文件排好要依次尝试的线路 */
+/* 线路分档：决定「先试谁」。这里最容易犯的错是只看「测速成功」——
+ * 直连被测到 518B/s 也算成功，于是它排第一，所有镜像永远轮不到。
+ *  0 实测够快      → 按速度从高到低
+ *  1 测不出速度（跨域/未知）→ 网络可达，下载照样能走，排第二
+ *  2 测得出来但很慢（直连 518B/s 这种）→ 排第三
+ *  3 连不上/超时/HTTP 错 → 最后才试
+ */
+function routeTier(p) {
+  if (!p) return 1;
+  if (p.ok && (p.bps || 0) >= ROUTE_GOOD_BPS) return 0;
+  if (!p.ok && p.err === 'cors') return 1;
+  if (p.ok) return 2;
+  return 3;
+}
+
 async function routesForFile(url, settings) {
   var probed = null;
   if (settings.autoProbe) {
@@ -730,21 +769,21 @@ async function routesForFile(url, settings) {
     probed = probeCache || (await EXT.storage.local.get('routeCache')).routeCache || null;
   }
   var all = allRoutes(settings);
-  var order = [];
-  if (probed && probed.list && probed.list.length) {
-    probed.list.forEach(function (r) {
-      var hit = all.filter(function (x) { return x.prefix === r.prefix; })[0];
-      if (hit && r.ok) order.push({ name: hit.name, prefix: hit.prefix });
-    });
-  }
-  all.forEach(function (r) {
-    if (!order.some(function (x) { return x.prefix === r.prefix; })) order.push(r);
+  var stats = await loadStats();
+  var pmap = {};
+  if (probed && probed.list) probed.list.forEach(function (r) { pmap[r.prefix] = r; });
+  var decorated = all.map(function (r) {
+    var p = pmap[r.prefix] || null;
+    return { name: r.name, prefix: r.prefix, _p: p, _tier: routeTier(p) };
   });
-  // 没有本次测速数据的线路，按历史健康度排（下过 500KB/s 的线路自然排前面）
-  if (!probed || !probed.list || !probed.list.length) {
-    var stats = await loadStats();
-    order = sortByScore(order, stats);
-  }
+  decorated.sort(function (a, b) {
+    if (a._tier !== b._tier) return a._tier - b._tier;
+    var ab = (a._p && a._p.ok) ? (a._p.bps || 0) : 0;
+    var bb = (b._p && b._p.ok) ? (b._p.bps || 0) : 0;
+    if (ab !== bb) return bb - ab;                       // 同档里实测快的在前
+    return routeScore(stats, b.prefix) - routeScore(stats, a.prefix);   // 再按历史健康度
+  });
+  var order = decorated.map(function (r) { return { name: r.name, prefix: r.prefix }; });
   var now = Date.now();
   var fresh = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) < now; });
   var cooling = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) >= now; });
@@ -939,30 +978,62 @@ function judgeSlow(task) {
     return;
   }
   if (!task.slowSince) { task.slowSince = now; return; }
-  if (now - task.slowSince >= SLOW_JUDGE_MS) task.slow = true;
-  // 自动提速都救不回来、而且几乎没下多少，才换线路重来
-  if (now - task.slowSince >= AUTO_SWITCH_MS && !task.autoSwitched &&
-      (task.boostCount || 0) >= 2 &&
-      (!total || task.received < total * 0.08)) {
-    task.autoSwitched = true;
-    switchRoute(task, null, true);
-  }
+  var spent = now - task.slowSince;
+  if (spent >= SLOW_JUDGE_MS) task.slow = true;
+
+  // 换线次数有上限；已经下了不少也不换（换线等于把这部分白扔）
+  if ((task.routeTries || 0) >= MAX_ROUTE_TRIES) return;
+  if (total && task.received > total * 0.08) return;
+  // 一上来就慢到没救（直连被限成几十 KB/s）：给它 5.5 秒，不行立刻换下一条，
+  // 不再等「暂停→继续」折腾两轮 —— 以前要 50 秒以上才换，而且还是只允许换一次。
+  var hopeless = spent >= FAST_SWITCH_MS && (task.bestSpeed || 0) < th * 2;
+  var overdue = spent >= AUTO_SWITCH_MS;
+  if (hopeless || overdue) switchRoute(task, null, true);
 }
 
 /* 换线路：停掉当前这条，从下一条（或指定线路）重新开始 */
 async function switchRoute(task, prefix, auto) {
+  if (!task || task.switching) return false;      // 换线期间别被反复触发
+  task.switching = true;
+  try {
+    return await doSwitchRoute(task, prefix, auto);
+  } finally {
+    task.switching = false;
+  }
+}
+
+async function doSwitchRoute(task, prefix, auto) {
   if (!task) return false;
   var settings = await settingsNow();
   var order = await routesForFile(task.url, settings);
   if (!order.length) return false;
+
+  // 记住这个任务试过哪些线路，避免换线绕一圈又回到刚放弃的那条
+  var tried = (task.triedRoutes || []).slice();
+  if (task.routePrefix !== undefined && tried.indexOf(task.routePrefix) < 0) tried.push(task.routePrefix);
+  task.triedRoutes = tried;
+
   var idx;
   if (prefix) {
     idx = 0;
     order.forEach(function (r, i) { if (r.prefix === prefix) idx = i; });
   } else {
-    idx = (Number(task.routeIdx) || 0) + 1;
-    if (idx >= order.length) idx = 0;
+    var start = (Number(task.routeIdx) || 0) + 1;
+    idx = -1;
+    for (var k = 0; k < order.length; k++) {
+      var cand = (start + k) % order.length;
+      if (tried.indexOf(order[cand].prefix) < 0) { idx = cand; break; }
+    }
+    if (idx < 0) idx = start % order.length;      // 兜底：全试过了就从下一条重来
   }
+
+  // 自动换线说明这条线路实际表现不行：扣分 + 冷却，下次别再排它第一
+  if (auto && task.routePrefix !== undefined) {
+    task.routeTries = (task.routeTries || 0) + 1;
+    noteRoute(task.routePrefix, false, 0);
+    badUntil.set(task.routePrefix, Date.now() + 3 * 60 * 1000);
+  }
+
   var dlId = task.downloadId;
   if (dlId) {
     activeIds.delete(dlId);          // 先摘掉，cancel 触发的 interrupted 就不会走失败重试
@@ -982,7 +1053,9 @@ async function switchRoute(task, prefix, auto) {
   task.slowSince = 0;
   task._sp = null;
   task.error = '';
-  task.autoSwitched = !!auto;
+  task.bestSpeed = 0;              // 新线路重新计峰值，别拿上一条线的成绩判断它
+  task.boostCount = 0;
+  task.slowStreak = 0;
   var r = order[idx];
   if (r) task.route = r.name + (r.prefix ? '' : '（直连）');
   persist();

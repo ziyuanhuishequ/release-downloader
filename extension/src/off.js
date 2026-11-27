@@ -9,7 +9,7 @@
 
   var jobs = new Map();      // id -> {ctrl, parts, received, total, aborted, chunks}
   var MIN_CHUNK = 256 * 1024;
-  var STALL_MS = 20000;      // 这么久没有新字节，就认为连接卡死
+  var STALL_MS = 9000;       // 这么久没有新字节，就认为连接卡死，立刻换线重连
 
   function post(payload) {
     try {
@@ -174,7 +174,23 @@
 
   async function run(job) {
     try {
-      var total = job.size || await probeSize(job.urls[0], job.ctrl.signal);
+      var total = job.size || 0;
+      if (!total) {
+        /* 首选线路可能刚好挂了：挨个问一遍，别因为第一条拉不到大小就整个任务失败。
+         * 探通的那条会挪到最前面，后面所有分片也优先用它。 */
+        var lastErr = null;
+        for (var i = 0; i < job.urls.length; i++) {
+          try {
+            total = await probeSize(job.urls[i], job.ctrl.signal);
+            if (i > 0) { var good = job.urls.splice(i, 1)[0]; job.urls.unshift(good); }
+            break;
+          } catch (e) {
+            lastErr = e;
+            if (job.aborted) return;
+          }
+        }
+        if (!total) throw lastErr || new Error('所有线路都拿不到文件大小');
+      }
       if (job.aborted) return;
       job.total = total;
       var parts = makeParts(total, job.threads, job.urls.length);

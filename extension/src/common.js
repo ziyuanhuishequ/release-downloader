@@ -16,7 +16,7 @@ var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.4',
+  version: '1.4.5',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -109,7 +109,7 @@ var API_CHANNELS = [
   { name: 'ghproxy.net', base: 'https://ghproxy.net/' + API_BASE }
 ];
 
-var MIRROR_TIMEOUT_MS = 8000;
+var MIRROR_TIMEOUT_MS = 5500;   // 单条线路测速上限：5.5 秒内拉不完 96KB（<17KB/s）本来也不值得选
 /* 每条线路试拉 96KB 估速度。原来 256KB × 20 条 = 一次测速吃掉 5MB 流量，
  * 换到手机热点或按流量计费的网络上很难受；96KB 已经足够区分快慢。 */
 var PROBE_BYTES = 98304;

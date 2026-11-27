@@ -84,9 +84,9 @@
       if (best) {
         html = '<span class="pill ok">' + esc(best.name) + '</span><span class="rt-txt">' + fmtSpeed(best.bps) + ' · ' + ok.length + ' 条可测速</span><button class="lnk" id="btnProbe">重测</button>';
       } else if (blocked) {
-        html = '<span class="pill wait">测速受限</span><span class="rt-txt" title="镜像没有开放跨域读取，浏览器测不了速度，但不影响下载：下载时会按顺序自动尝试">跨域受限，下载时仍会依次试</span><button class="lnk" id="btnProbe">重测</button>';
+        html = '<span class="pill wait">测速受限</span><span class="rt-txt" title="镜像没开放跨域读取，浏览器测不了速度，但这不影响下载：会按历史优选镜像并自动换线">测速受限，下载会优先试镜像</span><button class="lnk" id="btnProbe">重测</button>';
       } else {
-        html = '<span class="pill bad">线路都不通</span><span class="rt-txt">稍后重测，或先在设置里加自定义线路</span><button class="lnk" id="btnProbe">重测</button>';
+        html = '<span class="pill bad">镜像都连不上</span><span class="rt-txt" title="浏览器连不上这些镜像域名，多半是代理、安全 DNS 或安全软件拦了它们；直连仍然可用，也可以在设置里填自己的线路">镜像都连不上（检查代理/安全 DNS）</span><button class="lnk" id="btnProbe">重测</button>';
       }
     } else {
       html = '<span class="pill bad">测速失败</span><span class="rt-txt">' + esc(p.error || '') + '</span><button class="lnk" id="btnProbe">重试</button>';
@@ -132,7 +132,8 @@
       var pb = probeMap[r.prefix];
       var speed;
       if (pb && pb.ok) speed = fmtSpeed(pb.bps);
-      else if (pb && pb.err === 'cors') speed = '跨域受限';
+      else if (pb && pb.err === 'cors') speed = '测速受限';
+      else if (pb && pb.err === 'dead') speed = '连不上';
       else if (pb && pb.err === 'timeout') speed = '超时';
       else if (pb && !pb.ok) speed = '不通';
       else if (r.score > 0) speed = '≈' + fmtSpeed(r.score);

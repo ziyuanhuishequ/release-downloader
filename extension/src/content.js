@@ -469,7 +469,7 @@
         routeHtml = '<span class="pill" id="rtPill">' + esc(top.name) + ' ' + fmtSpeed(top.bps) + '</span>' +
           '<span>' + okList.length + ' 条可测速</span>';
       } else if (state.probe.blocked) {
-        routeHtml = '<span class="pill wait" id="rtPill">测速受限</span><span>跨域受限，下载时仍会依次试</span>';
+        routeHtml = '<span class="pill wait" id="rtPill">测速受限</span><span>测不了镜像速度，下载会优先试镜像并自动换线</span>';
       } else {
         routeHtml = '<span class="pill bad" id="rtPill">线路都不通</span><span>稍后重新测速</span>';
       }
@@ -543,7 +543,7 @@
     }
     var head = '<div class="rline rhead"><span>线路</span><span>实测</span></div>';
     var rows = list.slice(0, 20).map(function (r) {
-      var sp = r.ok ? fmtSpeed(r.bps) : (r.err === 'cors' ? '跨域受限' : (r.err === 'timeout' ? '超时' : '不通'));
+      var sp = r.ok ? fmtSpeed(r.bps) : (r.err === 'cors' ? '测速受限' : (r.err === 'dead' ? '连不上' : (r.err === 'timeout' ? '超时' : '不通')));
       var key = prefKey(r.prefix);
       var pref = (state.settings && state.settings.preferRoute) === key;
       return '<div class="rline ' + (r.ok ? 'ok' : 'bad') + (pref ? ' pref' : '') +

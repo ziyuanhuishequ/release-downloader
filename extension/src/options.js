@@ -175,7 +175,8 @@
       var pb = pmap[r.prefix];
       var txt;
       if (pb && pb.ok) txt = fmtSpeed(pb.bps);
-      else if (pb && pb.err === 'cors') txt = '跨域受限';
+      else if (pb && pb.err === 'cors') txt = '测速受限';
+      else if (pb && pb.err === 'dead') txt = '连不上';
       else if (pb && pb.err === 'timeout') txt = '超时';
       else if (pb && !pb.ok) txt = '不通';
       else if (r.score > 0) txt = '≈' + fmtSpeed(r.score);
