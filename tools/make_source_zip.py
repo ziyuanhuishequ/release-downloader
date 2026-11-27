@@ -20,6 +20,8 @@ INCLUDE_DIRS = [
     "extension/screenshots",
     "screenshots",
     "tools",
+    "packaging",
+    ".github",
 ]
 INCLUDE_FILES = [
     "README.md",

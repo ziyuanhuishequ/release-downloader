@@ -1,6 +1,6 @@
 # GitHub 下载整理工具
 
-批量下载多个仓库的 GitHub Release 文件，并按系统与架构自动归档到不同文件夹。免安装单文件 exe，像素风界面，Windows 平台。
+批量下载多个仓库的 GitHub Release 文件，并按系统与架构自动归档到不同文件夹。免安装单文件程序，像素风界面，支持 **Windows / macOS**（另有[浏览器扩展](#浏览器扩展不装软件也能用)版）。
 
 ![主界面](screenshots/main.png)
 
@@ -8,18 +8,29 @@
 
 | 用途 | 文件 |
 | --- | --- |
-| Windows 桌面版（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.6.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.6.exe) |
+| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.7.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.7.exe) |
+| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.7-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-macOS-v1.6.7-universal.zip) |
 | Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip) |
 | Firefox | [`GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip) |
 
-上面三个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
-点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.6.zip`（Rust 源码）。
+上面几个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
+点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.7.zip`（Rust 源码）。
 扩展的每个历史版本另有单独 Release（如
 [ext-v1.2.1](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.2.1)）。
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
 （Edge 是 `edge://extensions`）→ 右上角开启「开发者模式」→「加载已解压的扩展程序」→ 选解压出来的文件夹。
 扩展是「加载已解压」安装，**不会自动更新**：换新版后覆盖解压，再到扩展页点「重新加载」。
+
+**装 macOS 版**：解压 zip 得到 `GitHubReleaseDownloader.app`，拖进「应用程序」文件夹即可，不用装任何运行时
+（包内是 arm64 + x86_64 的通用二进制，Intel 与 Apple 芯片都能跑）。
+
+> 没做 Apple 开发者签名/公证，第一次打开会被 Gatekeeper 拦住。任选一种方式放行：
+>
+> - 在「应用程序」里**右键 → 打开** → 再点「打开」；
+> - 或执行一次 `xattr -dr com.apple.quarantine /Applications/GitHubReleaseDownloader.app`。
+>
+> 只影响首次启动，之后双击即可。
 
 ## 它解决什么问题
 
@@ -68,7 +79,7 @@
 
 ## 使用
 
-1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.6.exe`，双击运行，无需安装
+1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.7.exe`，双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -105,6 +116,13 @@ cargo build --release
 
 产物为 `rust/target/release/release-organizer.exe`，约 4.7 MB。`Cargo.toml` 已配置体积优化（`opt-level="z"` + `lto` + `panic="abort"` + `strip`）。
 
+macOS：同一份源码直接 `cargo build --release` 即可（`build.rs` 只在 Windows 上链接 `.res` 图标资源）。
+官方包要的是「一个 .app 同时支持两种芯片」，这步在真 Mac 上做比较省事，仓库里配了 CI：
+`.github/workflows/macos.yml` 会分别编译 `aarch64-apple-darwin` 与 `x86_64-apple-darwin`，
+用 `lipo` 合成通用二进制，套上 `.app`（图标由 `rust/assets/icon-1024.png` 经 `sips`/`iconutil` 生成）并 ad-hoc 签名，
+最后打出 `GitHub-Release-Downloader-macOS-v<版本>-universal.zip`。推 `v*` 标签或在 Actions 里手动触发即可，
+指定 `tag` 输入框会把 zip 自动挂到对应 Release。
+
 ### 改版本号
 
 四处要同步修改，否则 exe 属性和窗口显示会对不上：
@@ -134,11 +152,15 @@ cargo build --release
 │  ├─ slowsrv.py           只让第一个分片请求变慢，验证「慢分片自动换连接」
 │  ├─ boost_srv.py         前 N 个请求慢、之后的请求全速，验证「自动重启提速」
 │  └─ err_srv.py           全 504 / 全 404 / 前 N 个 504，验证换线与自动重试
+├─ packaging/macos/
+│  └─ Info.plist           .app 的元信息模板（版本号由 CI 替换）
+├─ .github/workflows/
+│  └─ macos.yml            在真 Mac 上编译 mac 通用包并挂到 Release
 ├─ screenshots/            界面截图
 └─ 使用说明.txt             面向使用者的完整说明
 ```
 
-字体从系统加载 MiSans，缺失时依次降级到等线 / 黑体 / 雅黑，因此仓库不包含字体文件。
+字体从系统加载：Windows 用 MiSans → 等线 → 黑体 → 雅黑，macOS 用苹方 → 冬青黑 → 黑体，因此仓库不包含字体文件。
 
 ## 「下着下着不动了」是怎么处理的
 

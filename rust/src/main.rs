@@ -15,12 +15,12 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.6";
+const APP_VERSION: &str = "1.6.7";
 /// 检测更新要查的仓库
 const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
 /// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
 const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.6";
+const USER_AGENT: &str = "ReleaseOrganizer/1.6.7";
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -187,10 +187,15 @@ fn exe_dir() -> Option<PathBuf> {
 /// 其它平台是 `$XDG_CACHE_HOME/github-release-downloader`），
 /// 用户平时看不到，卸载时删掉这个目录即可。
 fn state_dir() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
+    let base = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .map(|p| p.join("GitHubReleaseDownloader"))
+    } else if cfg!(target_os = "macos") {
+        // macOS 惯例：~/Library/Caches/<App>
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|p| p.join("Library").join("Caches").join("GitHubReleaseDownloader"))
     } else {
         std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
@@ -2552,7 +2557,10 @@ impl App {
 
 fn default_outdir() -> String {
     // 默认放桌面；取不到桌面就退回程序所在目录
-    if let Ok(home) = std::env::var("USERPROFILE") {
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok());
+    if let Some(home) = home {
         let desktop = PathBuf::from(&home).join("Desktop");
         if desktop.is_dir() {
             return desktop.to_string_lossy().to_string();
@@ -2560,6 +2568,10 @@ fn default_outdir() -> String {
         let one_drive = PathBuf::from(&home).join("OneDrive").join("Desktop");
         if one_drive.is_dir() {
             return one_drive.to_string_lossy().to_string();
+        }
+        let downloads = PathBuf::from(&home).join("Downloads");
+        if downloads.is_dir() {
+            return downloads.to_string_lossy().to_string();
         }
         if PathBuf::from(&home).is_dir() {
             return home;
@@ -2608,9 +2620,32 @@ fn pick_folder() -> Option<String> {
     out
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn pick_folder() -> Option<String> {
     None
+}
+
+/// macOS 没有 SHBrowseForFolder，借用系统自带的 osascript 弹「选择文件夹」
+#[cfg(target_os = "macos")]
+fn pick_folder() -> Option<String> {
+    let script = "POSIX path of (choose folder with prompt \"选择下载保存位置\")";
+    let out = std::process::Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // choose folder 返回的 POSIX 路径带结尾斜杠，去掉它（根目录除外）
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// 自定义「粗体家族」名字：给标题与按钮用更厚实的字重
@@ -2630,26 +2665,70 @@ fn pr(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Proportional)
 }
 
+/// 各平台的中文字体候选（按优先级）。找不到就退回 egui 自带字体，
+/// 界面能开但中文会显示成方块，所以这里把系统常见的中文字体都列上。
+fn font_lists() -> (Vec<&'static str>, Vec<&'static str>) {
+    #[cfg(target_os = "windows")]
+    {
+        (
+            vec![
+                "C:/Windows/Fonts/MiSans-Regular.ttf",
+                "C:/Windows/Fonts/Deng.ttf",
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/simsun.ttc",
+            ],
+            vec![
+                "C:/Windows/Fonts/MiSans-Demibold.ttf",
+                "C:/Windows/Fonts/MiSans-Semibold.ttf",
+                "C:/Windows/Fonts/Dengb.ttf",
+                "C:/Windows/Fonts/msyhbd.ttc",
+                "C:/Windows/Fonts/simhei.ttf",
+            ],
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        (
+            vec![
+                // 苹方：10.11 起系统自带，简繁都覆盖
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+                "/System/Library/Fonts/Supplemental/Songti.ttc",
+                "/Library/Fonts/Arial Unicode.ttf",
+            ],
+            vec![
+                // 没有独立的「粗体」中文字体文件，用黑体中黑代替
+                "/System/Library/Fonts/STHeiti Medium.ttc",
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            ],
+        )
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        (
+            vec![
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            ],
+            vec![
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            ],
+        )
+    }
+}
+
 fn install_fonts(ctx: &egui::Context) {
-    // 正文：MiSans（几何现代）→ 等线 → 黑体 → 雅黑；粗体再单独挂一套
-    let regular = [
-        "C:/Windows/Fonts/MiSans-Regular.ttf",
-        "C:/Windows/Fonts/Deng.ttf",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simsun.ttc",
-    ];
-    let heavy = [
-        "C:/Windows/Fonts/MiSans-Demibold.ttf",
-        "C:/Windows/Fonts/MiSans-Semibold.ttf",
-        "C:/Windows/Fonts/Dengb.ttf",
-        "C:/Windows/Fonts/msyhbd.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-    ];
+    // 正文优先「几何现代」的无衬线，粗体再单独挂一套
+    let (regular, heavy) = font_lists();
 
     let mut fonts = egui::FontDefinitions::default();
     let mut has_body = false;
-    for path in regular {
+    for path in &regular {
         if let Ok(bytes) = std::fs::read(path) {
             fonts
                 .font_data
@@ -2668,7 +2747,7 @@ fn install_fonts(ctx: &egui::Context) {
 
     // 粗体家族：找不到粗体时退化成正文家族，保证 FontId 一定存在
     let mut fam: Vec<String> = Vec::new();
-    for path in heavy {
+    for path in &heavy {
         if let Ok(bytes) = std::fs::read(path) {
             fonts
                 .font_data
@@ -2763,6 +2842,10 @@ fn open_path(path: &str) {
     {
         let _ = std::process::Command::new("open").arg(path).spawn();
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
 }
 
 /// 用系统默认浏览器打开网址
@@ -2776,6 +2859,10 @@ fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
 }
 

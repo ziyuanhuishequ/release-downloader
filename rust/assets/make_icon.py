@@ -56,6 +56,37 @@ def render(size):
     return px
 
 
+def write_png(px, size, path):
+    """把像素矩阵写成 RGBA PNG（不依赖 Pillow）"""
+    import zlib
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = bytearray()
+    for y in range(size):
+        raw.append(0)
+        for x in range(size):
+            r, g, b, a = px[y][x]
+            raw += bytes(
+                (
+                    int(r * 255 + 0.5),
+                    int(g * 255 + 0.5),
+                    int(b * 255 + 0.5),
+                    int(a * 255 + 0.5),
+                )
+            )
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    with open(path, "wb") as f:
+        f.write(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b"")
+        )
+
+
 def to_bytes(px, size):
     buf = bytearray()
     for y in range(size):
@@ -137,7 +168,7 @@ def _vs_block(key, value, value_len, wtype, children=b""):
     return struct.pack("<HHH", 6 + len(body), value_len, wtype) + body
 
 
-def version_blob(ver="1.6.6.0"):
+def version_blob(ver="1.6.7.0"):
     """生成 RT_VERSION 资源：让 exe 属性里能看到名称与版本号"""
     desc = "GitHub Release 下载整理工具"
     nums = [int(x) for x in ver.split(".")]
@@ -248,36 +279,15 @@ def main():
 
     # 预览图（PNG，仅用于检查效果）
     try:
-        import zlib
-
-        def chunk(tag, data):
-            c = struct.pack(">I", len(data)) + tag + data
-            return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-
-        raw = b""
-        for y in range(256):
-            raw += b"\x00"
-            for x in range(256):
-                r, g, b, a = big[y][x]
-                raw += bytes(
-                    (
-                        int(r * 255 + 0.5),
-                        int(g * 255 + 0.5),
-                        int(b * 255 + 0.5),
-                        int(a * 255 + 0.5),
-                    )
-                )
-
-        ihdr = struct.pack(">IIBBBBB", 256, 256, 8, 6, 0, 0, 0)
-        with open(os.path.join(HERE, "preview.png"), "wb") as f:
-            f.write(
-                b"\x89PNG\r\n\x1a\n"
-                + chunk(b"IHDR", ihdr)
-                + chunk(b"IDAT", zlib.compress(raw, 9))
-                + chunk(b"IEND", b"")
-            )
+        write_png(big, 256, os.path.join(HERE, "preview.png"))
     except Exception as exc:  # noqa: BLE001
         print("preview skipped:", exc)
+
+    # macOS 图标源图：1024x1024（CI 里用 sips + iconutil 生成 .icns）
+    try:
+        write_png(render(1024), 1024, os.path.join(HERE, "icon-1024.png"))
+    except Exception as exc:  # noqa: BLE001
+        print("icon-1024 skipped:", exc)
 
     print("icon.ico / icon.res / icon.rgba 生成完成（像素风 16x16 最近邻放大）")
 
