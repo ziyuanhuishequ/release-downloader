@@ -118,3 +118,27 @@ textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; f
 .rline .bar2 { width: 90px; height: 8px; border: 2px solid var(--ink); background: #fff; flex: none; }
 .rline .bar2 i { display: block; height: 100%; background: var(--mint); }
 .pool-tip { font-size: 12px; color: var(--text2); }
+
+/* 自建加速节点：默认折叠，不占版面，需要的人点开就有完整步骤 */
+.adv {
+  margin-top: 16px;
+  border: 2px solid var(--ink);
+  background: #FFFDF6;
+  padding: 8px 12px 12px;
+}
+.adv > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  padding: 3px 0;
+  list-style: none;
+}
+.adv > summary::-webkit-details-marker { display: none; }
+.adv > summary::before { content: "▸ "; color: var(--coral); }
+.adv[open] > summary::before { content: "▾ "; }
+.adv[open] > summary { margin-bottom: 8px; }
+.steps { font-size: 12px; color: var(--text2); line-height: 1.85; padding-left: 18px; margin-bottom: 8px; }
+.steps b { color: var(--ink); }
+.steps a { color: #782814; }
+.adv textarea { background: #FBF7EC; font-size: 11.5px; line-height: 1.6; }

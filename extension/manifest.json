@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GitHub Release 下载助手",
-  "version": "1.2.1",
-  "description": "在 GitHub 发布页一键勾选资源、自动测速选最快镜像、按仓库版本归档下载。纯浏览器运行，不用装桌面软件。",
+  "version": "1.4.0",
+  "description": "在 GitHub 发布页一键勾选资源、自动测速选最快镜像、按仓库版本归档下载；内置国内镜像和多通道 API，没梯子也能打开 GitHub、扫描仓库。",
   "minimum_chrome_version": "109",
   "icons": {
     "16": "icons/icon16.png",
@@ -32,7 +32,10 @@
     "downloads",
     "contextMenus",
     "notifications",
-    "offscreen"
+    "offscreen",
+    "declarativeNetRequest",
+    "scripting",
+    "activeTab"
   ],
   "optional_permissions": [
     "tabs"
@@ -40,6 +43,11 @@
   "host_permissions": [
     "https://api.github.com/*",
     "https://github.com/*",
+    "https://*.githubusercontent.com/*",
+    "https://gh-proxy.at9.net/*",
+    "https://kkgithub.com/*",
+    "https://bgithub.xyz/*",
+    "https://hub.fgit.cf/*",
     "https://codeload.github.com/*",
     "https://objects.githubusercontent.com/*",
     "https://raw.githubusercontent.com/*",
@@ -61,7 +69,11 @@
     "https://ghfile.geekbang.fun/*",
     "https://gh.api.99988866.xyz/*",
     "https://gh.ddlc.top/*",
-    "https://ghproxy.markxu.icu/*"
+    "https://ghproxy.markxu.icu/*",
+    "https://cors.eu.org/*",
+    "https://hub.fastgit.xyz/*",
+    "https://dgithub.xyz/*",
+    "https://github.abskoop.workers.dev/*"
   ],
   "optional_host_permissions": [
     "https://*/*"

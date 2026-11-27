@@ -37,10 +37,13 @@
     '.fab:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #1A1E30}',
     '.fab svg{width:28px;height:28px;display:block}',
     '.fab .dot{position:absolute;right:-6px;top:-8px;background:#2ED3A5;border:2px solid #1A1E30;min-width:22px;height:22px;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}',
-    '.card{width:392px;max-height:min(560px,calc(100vh - 60px));background:#FFFDF6;border:3px solid #1A1E30;box-shadow:6px 6px 0 rgba(26,30,48,.85);display:flex;flex-direction:column;overflow:hidden}',
+    '.card{width:min(392px,calc(100vw - 40px));max-height:min(560px,calc(100vh - 60px));background:#FFFDF6;border:3px solid #1A1E30;box-shadow:6px 6px 0 rgba(26,30,48,.85);display:flex;flex-direction:column;overflow:hidden}',
     '.hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1A1E30;color:#FFF3DC}',
     '.hd .t{font-weight:700;font-size:13.5px;letter-spacing:.3px}',
     '.hd .repo{margin-left:auto;font-size:11.5px;color:#C9CBD8;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.hd .mb{font-size:9.5px;font-weight:800;line-height:1.5;background:#2ED3A5;color:#0B3B2E;border:1px solid #1A1E30;padding:0 4px;margin-left:6px;white-space:nowrap}',
+    '.mir{font-size:11px;color:#5B5F70;display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
+    '.mir .lk{color:#782814;cursor:pointer;text-decoration:underline}',
     '.hd .x{width:22px;height:22px;border:2px solid #FFF3DC;background:transparent;color:#FFF3DC;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}',
     '.hd .x:hover{background:#FF6A3D;border-color:#FF6A3D;color:#fff}',
     '.bar{display:flex;gap:6px;padding:8px 10px;border-bottom:2px solid #1A1E30;background:#FFF3DC;flex-wrap:wrap;align-items:center}',
@@ -132,8 +135,15 @@
   // 设置异步读一次就够了（线路偏好、归档开关）
   getSettings().then(function (s) { state.settings = s; }).catch(function () {});
 
+  /* 当前页面在 github.com 上的路径。
+   * 前缀型镜像（cors.isteed.cc/https://github.com/...）的 location.pathname 里带着
+   * 完整地址，先归一化再解析，否则面板在前缀型镜像上永远不出现。 */
+  function ghPath() {
+    try { return new URL(ghCanonical(location.href)).pathname; } catch (e) { return location.pathname; }
+  }
+
   function detect() {
-    var m = location.pathname.match(/^\/([^/]+)\/([^/]+)\/releases(?:\/(tag|latest|download)\/?(.*))?\/?$/);
+    var m = ghPath().match(/^\/([^/]+)\/([^/]+)\/releases(?:\/(tag|latest|download)\/?(.*))?\/?$/);
     if (!m) return null;
     if (m[3] === 'download') return null;      // 具体文件页不挂面板
     return { owner: m[1], repo: m[2], tag: m[3] === 'tag' ? decodeURIComponent(m[4] || '') : '' };
@@ -146,6 +156,8 @@
     document.querySelectorAll('a[href*="/releases/download/"]').forEach(function (a) {
       var href = a.getAttribute('href') || '';
       var abs = href.indexOf('http') === 0 ? href : location.origin + href;
+      // 镜像页上链接是镜像域名，统一下载地址回 github.com，否则线路前缀会拼错
+      abs = ghCanonical(abs);
       var p = parseAssetUrl(abs);
       if (!p || seen[p.asset]) return;
       seen[p.asset] = true;
@@ -219,7 +231,7 @@
       var dom = assetsFromDom();
       if (dom.length) {
         state.assets = dom;
-        state.tag = d.tag || (location.pathname.match(/\/tag\/(.+)$/) || [])[1] || 'latest';
+        state.tag = d.tag || (ghPath().match(/\/tag\/(.+)$/) || [])[1] || 'latest';
       } else {
         state.error = (res && res.error) || '没找到这个版本的资源';
       }
@@ -403,9 +415,17 @@
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
   }
 
+  /* 当前是不是跑在镜像域名上（github.com 原站为 false） */
+  function onMirrorHost() {
+    return !/(^|\.)github\.com$/i.test(location.host);
+  }
+
   function render() {
+    var onMirror = onMirrorHost();
     if (!state.host) return;
     var root = state.host.shadowRoot;
+    var app = root.getElementById('app');
+    if (!app) return;
     var d = detect();
     if (!d) { state.host.style.display = 'none'; return; }
     state.host.style.display = '';
@@ -467,6 +487,7 @@
         '<div class="card">' +
           '<div class="hd">' +
             '<div class="t">Release 下载助手</div>' +
+            (onMirror ? '<span class="mb">镜像</span>' : '') +
             '<div class="repo">' + esc(state.repo) + (state.tag ? ' · ' + esc(state.tag) : '') + '</div>' +
             '<button class="x" id="close">×</button>' +
           '</div>' +
@@ -480,6 +501,7 @@
             (state.showRoutes ? routeListHtml() : '') +
             '<button class="go" id="go"' + (picked.length ? '' : ' disabled') + '>下载 ' + picked.length + ' 个文件' +
               (pickedSize ? '（' + fmtSize(pickedSize) + '）' : '') + '</button>' +
+            (onMirror ? '<div class="mir">经镜像 ' + esc(location.host) + ' 访问 · <span class="lk" id="backGh">切回 GitHub 原站</span></div>' : '') +
             '<div class="tip">保存到「下载/GitHub/仓库/版本」，可在扩展设置里关掉归档</div>' +
           '</div>' +
         '</div>'
@@ -498,8 +520,14 @@
       '</div>' +
       '</div>';
 
-    root.innerHTML = '<style>' + CSS + '</style>' + html;
+    // 只替换内容容器，<style> 留在原处不重建：
+    // 原来每次都把 500 行 CSS 塞回 innerHTML，Chrome 要重新解析一遍。
+    var listEl = root.querySelector('.list');
+    var keepTop = listEl ? listEl.scrollTop : 0;
+    app.innerHTML = html;
     wire(root);
+    var nl = root.querySelector('.list');
+    if (nl && keepTop) nl.scrollTop = keepTop;
   }
 
   /* 线路面板：点「全部线路」展开，把测速结果和线路池状态一次看全 */
@@ -523,6 +551,19 @@
       '<span class="lk" id="rtRefresh">更新线路池</span></div></div>';
   }
 
+  /* 勾选后只改这一行的类名和底部按钮，不整块重绘：列表滚动位置不会跳，也没有闪烁 */
+  function paintPicked(root) {
+    var picked = pickedAssets();
+    var size = picked.reduce(function (s, a) { return s + (a.size || 0); }, 0);
+    var cnt = root.querySelector('.cnt');
+    if (cnt) cnt.textContent = picked.length + '/' + state.assets.length + ' 已选';
+    var go = root.getElementById('go');
+    if (go) {
+      go.disabled = !picked.length;
+      go.textContent = '下载 ' + picked.length + ' 个文件' + (size ? '（' + fmtSize(size) + '）' : '');
+    }
+  }
+
   function wire(root) {
     wireQueue(root);
     var fab = root.getElementById('fab');
@@ -536,6 +577,13 @@
     var close = root.getElementById('close');
     if (close) close.addEventListener('click', function () { state.open = false; stopPoll(); render(); });
 
+    // 镜像页上「切回原站」：先关掉加速规则，否则会被重新导回镜像
+    var backGh = root.getElementById('backGh');
+    if (backGh) backGh.addEventListener('click', function () {
+      var target = originalUrlOf(location.href);
+      bgSend('boost-set', { on: false }).then(function () { location.href = target; });
+    });
+
     root.querySelectorAll('[data-filter]').forEach(function (el) {
       el.addEventListener('click', function () {
         state.filter = el.getAttribute('data-filter');
@@ -547,7 +595,8 @@
       el.addEventListener('click', function () {
         var name = el.getAttribute('data-name');
         state.picked[name] = !state.picked[name];
-        render();
+        el.classList.toggle('sel', !!state.picked[name]);
+        paintPicked(root);
       });
     });
 
@@ -630,7 +679,9 @@
     }
     state.host = document.createElement('div');
     state.host.id = 'ghdl-host';
-    state.host.attachShadow({ mode: 'open' });
+    var sh = state.host.attachShadow({ mode: 'open' });
+    // CSS 只解析一次，后续 render 只换 #app 里的内容
+    sh.innerHTML = '<style>' + CSS + '</style><div id="app"></div>';
     document.documentElement.appendChild(state.host);
     state.assets = [];
     state.probe = null;
@@ -646,6 +697,15 @@
       }
     });
   } catch (e) {}
+
+  /* 镜像页上点了 Release 资源链接：mirror.js 拦下来后走这里，直接弹出面板 */
+  window.addEventListener('ghdl-open-panel', function () {
+    state.open = true;
+    render();
+    startPoll();
+    if (!state.assets.length && !state.loading) loadAssets();
+    else if (!state.probe) probeBest();
+  });
 
   ['turbo:load', 'pjax:end'].forEach(function (ev) {
     document.addEventListener(ev, function () { setTimeout(mount, 300); });

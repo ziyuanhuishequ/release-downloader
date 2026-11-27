@@ -8,15 +8,15 @@
 
 | 用途 | 文件 |
 | --- | --- |
-| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.7.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.7.exe) |
-| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.7-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-macOS-v1.6.7-universal.zip) |
-| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip) |
-| Firefox | [`GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip) |
+| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.8.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.8.exe) |
+| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.8-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-macOS-v1.6.8-universal.zip) |
+| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.0-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.4.0-chrome.zip) |
+| Firefox | [`GitHub-Release-Downloader-Ext-v1.4.0-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.4.0-firefox.zip) |
 
 上面几个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
-点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.7.zip`（Rust 源码）。
+点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.8.zip`（Rust 源码）。
 扩展的每个历史版本另有单独 Release（如
-[ext-v1.2.1](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.2.1)）。
+[ext-v1.4.0](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.0)）。
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
 （Edge 是 `edge://extensions`）→ 右上角开启「开发者模式」→「加载已解压的扩展程序」→ 选解压出来的文件夹。
@@ -79,7 +79,7 @@
 
 ## 使用
 
-1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.7.exe`，双击运行，无需安装
+1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.8.exe`，双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」
@@ -95,13 +95,35 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.4.0-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
 
-扩展 v1.2.1 起支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
+扩展 v1.3.0 起支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
 慢速自动「暂停→继续」、手动换线路；每个任务都能暂停/继续（分片任务保留已下数据，接着下不重来）；
 文件列表用「未下载 / 下载中 / 已暂停 / 已下载」四种角标区分，还能一键「只看未下载」；
 线路面板可展开看全部线路的实测速度与健康度，点一下固定使用；设置页同样有「检测更新」和线路池更新。
+
+扩展 v1.4.0 新增「GitHub 国内访问」开关：没有梯子时打开它，浏览器访问 `github.com` 的页面会
+自动转到可用的整站镜像（当前实测可用 `gh-proxy.at9.net`、`cors.isteed.cc`），仓库页、Releases、
+代码树、Issues 都能正常浏览。**只有「打开网页」这一种请求会被重定向，下载请求完全不经过镜像**，
+仍旧走线路池 + 分片续传，速度和断点续传都不受影响。镜像池写在 `routes.json` 的 `sites` 字段里，
+2 小时自动更新、开开关时强制刷新，当前镜像失效会在后台自动切到下一个可用的；全都不通时保持直连。
+
+### 镜像不可靠，这个功能会不会哪天就废了
+
+会——如果只靠别人的公益镜像的话。能代理**整站网页**的镜像本来就极少（绝大多数 gh-proxy
+只代文件、不代页面），实测长期可用的通常只有一两台，被限流（429）或直接关站都很常见。
+这是服务本身的性质，任何插件都改变不了。所以 v1.4.0 在这个功能之外又做了三件事：
+
+1. **API 和网页彻底解耦。** `api.github.com` 在国内同样被污染。扩展现在给 API 也配了多条通路
+   （直连 → gh-proxy.org → gh-proxy.com → ghproxy.net，谁先通用谁，并记住上次成功的那条）。
+   结果是：**哪怕 github.com 一个镜像都打不开，点扩展图标粘贴 `owner/repo`，照样能列出
+   所有 Release 并下载**。这条路径完全不依赖网页。
+2. **镜像失效自动换线。** 后台定期复核正在用的镜像，挂了就静默换一台，下次打开页面不会白屏；
+   开开关也不再等探测——有上次用过的镜像时 100ms 内就生效。
+3. **可以自建。** 设置页「更稳的做法：自建加速节点」里内置了一段 Cloudflare Worker 代码，
+   复制 → 部署 → 把地址填进「自定义镜像」即可。免费额度每天 10 万次请求，个人下载绰绰有余，
+   不受任何人的限流影响。这是目前最可控的方案（`*.workers.dev` 在国内不稳，建议绑定自己的域名）。
 
 用法、设置、与桌面版的差别见 [extension/README.md](extension/README.md)。
 

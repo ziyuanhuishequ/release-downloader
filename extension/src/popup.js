@@ -17,6 +17,7 @@
     tasks: [],
     routes: [],
     pool: null,
+    via: '',             // 这次 API 数据是经哪个镜像拿的（直连为空）
     prefer: '',
     showRoutes: false,
     busy: false
@@ -296,9 +297,13 @@
 
   function renderBody() {
     var html = '<div id="taskWrap">' + taskStripHtml() + '</div>';
+    if (st.via) {
+      html += '<div class="via">直连 GitHub API 不通，已自动经 <b>' + esc(st.via) + '</b> 读取</div>';
+    }
 
     if (st.error) {
-      html += '<div id="assetWrap"><div class="msg"><b>' + esc(st.error) + '</b>检查仓库地址是否正确；私有仓库需要在设置里填 GitHub Token。</div></div>';
+      html += '<div id="assetWrap"><div class="msg"><b>' + esc(st.error) + '</b>检查仓库地址是否正确；私有仓库需要在设置里填 GitHub Token。' +
+        '<br><span class="tiny2">直连和镜像都试过了。仍然不行的话，多半是仓库名写错或这个仓库确实不存在。</span></div></div>';
       bodyEl.innerHTML = html;
       return;
     }
@@ -306,7 +311,7 @@
     if (!st.assets.length) {
       html += '<div id="assetWrap"><div class="hint"><div class="big">粘贴仓库地址就能下</div>' +
         '<div>例如 <b style="color:#1A1E30">sharkdp/bat</b>，或在 GitHub 的 Release 页面看右下角面板。</div>' +
-        '<div style="margin-top:8px;color:#8A8577">全部在浏览器里完成，不用装桌面软件。</div></div></div>';
+        '<div style="margin-top:8px;color:#8A8577">github.com 打不开也能用：这里读的是 GitHub API，走的是独立的多条通道。</div></div></div>';
       bodyEl.innerHTML = html;
       return;
     }
@@ -406,6 +411,7 @@
       return;
     }
     st.repo = res.repo;
+    st.via = res.via || '';
     st.releases = res.releases || [];
     if (!st.releases.length) {
       st.error = '这个仓库还没有发布 Release';
@@ -439,6 +445,7 @@
       return;
     }
     st.error = '';
+    st.via = res.via || st.via;
     st.release = res.release;
     st.assets = res.release.assets || [];
     await refreshHist();
@@ -555,6 +562,87 @@
     renderFooter();
   }
 
+  /* ---------- GitHub 国内访问（整站镜像开关） ---------- */
+
+  var boostOn = false;
+  var boostSite = null;
+
+  function paintBoost(res) {
+    boostOn = !!(res && res.on);
+    boostSite = (res && res.site) || null;
+    var sw = $('btnBoost');
+    if (!sw) return;
+    sw.classList.toggle('on', boostOn);
+    sw.setAttribute('aria-checked', boostOn ? 'true' : 'false');
+    var go = $('btnBoostGo');
+    if (go) go.classList.toggle('hide', !boostOn);
+    var tip = $('boostTip');
+    if (!tip) return;
+    tip.className = 'bt2';
+    tip.title = '';
+    if (boostOn && boostSite) {
+      tip.className = 'bt2 ok';
+      tip.textContent = '已开启 · ' + boostSite.name + (boostSite.ms ? ' · ' + boostSite.ms + 'ms' : '') +
+        (boostSite.ok === false ? '（正在换线）' : '');
+    } else if (res && res.sites && res.sites.length) {
+      var ok = res.sites.filter(function (x) { return x.ok; }).length;
+      if (ok) {
+        tip.textContent = '未开启 · 直连（' + ok + '/' + res.sites.length + ' 个镜像可用）';
+        tip.title = '开启后 github.com 的页面会走镜像打开；下载不受影响。';
+      } else {
+        // 整站镜像本来就稀缺，0 个可用是常态。别让用户以为功能坏了——
+        // 重点说明「下载和扫描仓库照样能用」。
+        tip.textContent = '未开启 · 直连（镜像暂时都不通）';
+        tip.className = 'bt2 bad';
+        tip.title = '能打开 GitHub 网页的整站镜像本来就很少，暂时都不通。' +
+          '下载文件、以及粘贴 owner/repo 扫描版本都不受影响。';
+      }
+    } else {
+      tip.textContent = '未开启 · 直连 github.com';
+    }
+  }
+
+  async function initBoost() {
+    var res = await bgSend('boost-state');
+    paintBoost(res);
+    // 缓存过期时后台正在重新探测，等一下再取一次，用户不用手动刷新
+    if (res && res.checking) {
+      setTimeout(async function () { paintBoost(await bgSend('boost-state')); }, 900);
+      setTimeout(async function () { paintBoost(await bgSend('boost-state')); }, 2600);
+    }
+  }
+
+  async function toggleBoost() {
+    var sw = $('btnBoost');
+    var tip = $('boostTip');
+    var want = !boostOn;
+    sw.disabled = true;
+    tip.className = 'bt2';
+    tip.textContent = want ? '正在探测可用镜像…' : '正在关闭…';
+    var res = await bgSend('boost-set', { on: want });
+    sw.disabled = false;
+    if (res && res.error) {
+      tip.className = 'bt2 bad';
+      tip.textContent = res.error;
+      return;
+    }
+    paintBoost(res);
+    if (want) {
+      // 当前标签就是 github.com 的话直接导过去，不用用户手动刷新
+      await bgSend('boost-current');
+    } else {
+      initBoost();   // 关掉后补一次「x/y 个镜像可用」的统计
+    }
+  }
+
+  async function openMirror() {
+    var res = await bgSend('boost-current');
+    if (res && res.ok) return;
+    if (boostSite && boostSite.base) {
+      try { EXT.tabs.create({ url: mirrorUrlOf(boostSite.base, 'https://github.com/') }); } catch (e) {}
+    }
+  }
+
   /* ---------- 装配 ---------- */
 
   async function init() {
@@ -566,6 +654,9 @@
     $('rel').onchange = function () { pickRelease(parseInt($('rel').value, 10) || 0); };
     $('repo').addEventListener('keydown', function (e) { if (e.key === 'Enter') scan(); });
     $('btnOptions').onclick = function () { bgSend('open-options'); };
+    $('btnBoost').onclick = toggleBoost;
+    $('btnBoostGo').onclick = openMirror;
+    initBoost();
     $('btnAll').onclick = function () {
       var list = visibleAssets();
       var allOn = list.every(function (a) { return st.picked[a.name]; });
@@ -612,8 +703,15 @@
     try {
       var tabs = await EXT.tabs.query({ active: true, currentWindow: true });
       var url = tabs && tabs[0] && tabs[0].url;
-      if (url && /^https:\/\/github\.com\//.test(url)) {
-        var m = url.match(/github\.com\/([^/]+)\/([^/?#]+)/);
+      // 镜像页也能猜：先换成 github.com 上的原地址再解析（只对本插件认的镜像域做换算）
+      var ghUrl = url ? originalUrlOf(url) : '';
+      if (url) {
+        try {
+          if (!isMirrorHost(new URL(url).host, st.settings)) ghUrl = url;
+        } catch (e) { ghUrl = url; }
+      }
+      if (ghUrl && /^https:\/\/github\.com\//.test(ghUrl)) {
+        var m = ghUrl.match(/github\.com\/([^/]+)\/([^/?#]+)/);
         if (m && m[1] !== 'orgs' && m[1] !== 'settings' && m[1] !== 'marketplace') {
           $('repo').value = m[1] + '/' + m[2];
         }

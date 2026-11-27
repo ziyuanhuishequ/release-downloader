@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "updated": "2026-11-26",
-  "note": "线路池：桌面版和浏览器扩展都会在 12 小时内自动拉取这份文件。新增或下线线路只改这里，用户端不用更新版本。prefix 必须以 / 结尾，空字符串表示直连。",
+  "version": 3,
+  "updated": "2026-11-27",
+  "note": "线路池：桌面版和浏览器扩展都会在 2 小时内自动拉取这份文件（扩展开开关时会强制刷新）。新增或下线线路只改这里，用户端不用更新版本。prefix 必须以 / 结尾，空字符串表示直连。routes 是 Release 文件下载用的线路；sites 是 GitHub 整站镜像（浏览器扩展「GitHub 国内访问」用），kind=path 表示 https://域名/<owner>/<repo>/...，kind=prefix 表示 https://域名/https://github.com/...。整站镜像极稀缺（绝大多数 gh-proxy 只代文件、不代页面），这里只放实测能打开 GitHub 页面的，宁缺毋滥：探不通的条目只会让用户看到「0/N 可用」，反而像坏了。",
   "routes": [
     {
       "name": "直连",
@@ -82,6 +82,53 @@
     {
       "name": "ghproxy.markxu",
       "prefix": "https://ghproxy.markxu.icu/"
+    }
+  ],
+  "sites": [
+    {
+      "name": "gh-proxy.at9.net",
+      "base": "https://gh-proxy.at9.net",
+      "kind": "path"
+    },
+    {
+      "name": "cors.isteed.cc",
+      "base": "https://cors.isteed.cc/",
+      "kind": "prefix"
+    },
+    {
+      "name": "cors.eu.org",
+      "base": "https://cors.eu.org/",
+      "kind": "prefix"
+    },
+    {
+      "name": "kkgithub",
+      "base": "https://kkgithub.com",
+      "kind": "path"
+    },
+    {
+      "name": "bgithub",
+      "base": "https://bgithub.xyz",
+      "kind": "path"
+    },
+    {
+      "name": "hub.fgit.cf",
+      "base": "https://hub.fgit.cf",
+      "kind": "path"
+    },
+    {
+      "name": "hub.fastgit.xyz",
+      "base": "https://hub.fastgit.xyz",
+      "kind": "path"
+    },
+    {
+      "name": "dgithub.xyz",
+      "base": "https://dgithub.xyz",
+      "kind": "path"
+    },
+    {
+      "name": "github.abskoop",
+      "base": "https://github.abskoop.workers.dev",
+      "kind": "path"
     }
   ]
 }

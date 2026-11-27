@@ -22,6 +22,21 @@ NAME = f"GitHub-Release-Downloader-Ext-v{VER}"
 SKIP_DIRS = {"screenshots", "__pycache__", "node_modules", ".git"}
 SKIP_FILES = {"build.py", "make_icons.py", "README.md", ".DS_Store"}
 
+# 自建加速节点的 Worker 代码：主文件放仓库 worker/ 下（方便单独维护和直接在
+# Cloudflare 后台粘贴），打包时同步一份到 src/，设置页用 getURL 读出来显示。
+WORKER_SRC = os.path.join(ROOT, "worker", "gh-relay.js")
+WORKER_DST = os.path.join(HERE, "src", "relay-worker.txt")
+
+
+def sync_worker():
+    if not os.path.isfile(WORKER_SRC):
+        return
+    data = open(WORKER_SRC, encoding="utf-8").read()
+    if os.path.isfile(WORKER_DST) and open(WORKER_DST, encoding="utf-8").read() == data:
+        return
+    open(WORKER_DST, "w", encoding="utf-8", newline="\n").write(data)
+    print("同步 worker/gh-relay.js -> src/relay-worker.txt")
+
 
 def collect():
     out = []
@@ -118,6 +133,7 @@ Firefox
 
 
 def main():
+    sync_worker()
     chrome_note = NOTE_COMMON.format(ver=VER)
     c = write_zip(os.path.join(ROOT, f"{NAME}-chrome.zip"), None, chrome_note)
     f = write_zip(os.path.join(ROOT, f"{NAME}-firefox.zip"), firefox_manifest(),

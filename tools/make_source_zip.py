@@ -22,6 +22,7 @@ INCLUDE_DIRS = [
     "tools",
     "packaging",
     ".github",
+    "worker",
 ]
 INCLUDE_FILES = [
     "README.md",

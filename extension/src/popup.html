@@ -16,6 +16,16 @@
     <button class="ico" id="btnOptions" title="打开设置">设置</button>
   </header>
 
+  <!-- GitHub 国内访问：开了以后 github.com 的页面会走整站镜像，下载照旧走线路池 -->
+  <div class="boost" id="boost">
+    <button class="bsw" id="btnBoost" role="switch" aria-checked="false" title="开启后用国内镜像打开 GitHub 页面"></button>
+    <div class="bt">
+      <div class="bt1">GitHub 国内访问</div>
+      <div class="bt2" id="boostTip">未开启 · 直连 github.com</div>
+    </div>
+    <button class="bgo hide" id="btnBoostGo">打开</button>
+  </div>
+
   <div class="scan">
     <input id="repo" type="text" spellcheck="false" placeholder="owner/repo，例如 sharkdp/bat">
     <button id="btnScan" class="act">扫描</button>

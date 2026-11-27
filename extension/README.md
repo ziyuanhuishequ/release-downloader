@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.2.1-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.4.0-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.2.1-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.4.0-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -51,14 +51,50 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
 - 每个任务都能**暂停 / 继续**：分片任务会把已下好的分片留在内存里，继续时接着要剩下的字节，不重下
 - 队列里可以手动「换线路」「取消」，不用等它慢慢下完
 - 某一片 20 秒没动静会自动断开换线路，不会卡死在一条死连接上
-- 下载前先探 256KB 校验（防镜像返回网页），不对自动换线
+- 下载前先探一字节校验（防镜像返回网页），不对自动换线
 - 断线、5xx 自动降级到备用线路重试，坏线路冷却 3 分钟
 - 按 `下载/GitHub/仓库名/版本号/文件名` 归档，可选关掉
 - 文件列表用「未下载 / 下载中 / 已暂停 / 已下载」角标区分，可一键「只看未下载」，
   下完的会记住（清浏览器数据或点设置页「清除下载记录」才会忘）
 - 线路面板可展开，看 20 条线路的实测速度与成功率，点一条固定使用
-- 线路池从仓库 `routes.json` 拉取（12 小时一次），镜像增减不用等扩展更新
+- 线路池从仓库 `routes.json` 拉取（2 小时一次，开「国内访问」开关时强制刷新），镜像增减不用等扩展更新
 - 下载开始时右下角会短暂浮现作者的小提示条，几秒后自动收起，不常驻、不挡操作
+
+## GitHub 国内访问
+
+没梯子的情况下，`github.com` 经常打不开。弹窗顶部有一个「GitHub 国内访问」开关：
+
+- 打开后，浏览器访问 `github.com` 的**页面**会自动转到可用的整站镜像：仓库页、Releases、
+  代码树、Issues、搜索都能正常浏览；镜像页右下角照常出现下载面板。
+- 镜像有两种形态，扩展都支持：`路径型`（`https://镜像域名/owner/repo`，如 `gh-proxy.at9.net`）
+  和 `前缀型`（`https://镜像域名/https://github.com/owner/repo`，如 `cors.isteed.cc`）。
+- **下载完全不受影响**：重定向规则只作用于「页面打开」（`main_frame`），
+  扩展发起的下载、分片 Range 请求都不经过镜像，仍旧走线路池。
+- 登录 / 设置 / 上传这类需要账号的路径不会被转走（镜像没有登录态），会留在真 GitHub。
+- 镜像池在仓库的 `routes.json` 里（`sites` 字段），2 小时自动更新、开开关时强制刷新；
+  后台每 10 分钟复核一次正在用的镜像，挂了就静默换一台；全都不通时保持直连。
+- 开开关不再等探测：有上次用过的镜像时立即生效（通常 100ms 内），后台再去确认它还活着。
+- 设置页可以看每个镜像的实测延迟、点击固定使用，也可以填自己的镜像。
+
+> 说明：整站镜像属于第三方公益服务，随时可能失效或限流（HTTP 429）。
+> 遇到限流时镜像页会提示「换个镜像再试」，点一下即可切换。
+
+### 镜像全挂的时候还能不能用
+
+能。**「查版本 + 下载」这条链路和网页是分开的**：弹窗里粘贴 `owner/repo` 走的是 GitHub API，
+而 API 现在也有多条通路（直连 → gh-proxy.org → gh-proxy.com → ghproxy.net，谁先通用谁，
+并记住上次成功的）。所以哪怕 `github.com` 一个镜像都打不开，照样能扫出全部 Release 并下载，
+只是不能「浏览网页」。当数据是经镜像拿的时，弹窗顶部会明确写出来是经哪一台。
+
+### 想长期稳定：自建一个加速节点
+
+设置页「GitHub 国内访问 → 更稳的做法：自建加速节点」里内置了完整的 Cloudflare Worker 代码
+（也在仓库 [`worker/gh-relay.js`](../worker/gh-relay.js)），复制 → 在 Cloudflare 部署 →
+把地址填进「自定义镜像」即可。一个节点同时反代网页、API、Release 下载，免费额度每天 10 万次请求。
+
+`*.workers.dev` 这个域名在国内并不稳，建议在 Worker 里绑定自己的域名。有自建节点 + 自己的域名，
+是这个功能目前能达到的最稳状态。
+
 
 ## 设置
 
@@ -101,6 +137,7 @@ extension/
 │   ├── common.js          线路表、URL 拼接、平台识别、格式化
 │   ├── bg.js              Service Worker：GitHub API、测速、下载队列、失败换线
 │   ├── content.js         Release 页注入面板（Shadow DOM，样式完全隔离）
+│   ├── mirror.js          镜像页提示条 + 限流换站 + 页内链接改写
 │   ├── popup.html/css/js  工具栏弹窗
 │   └── options.*          设置页
 ├── screenshots/           README 用截图

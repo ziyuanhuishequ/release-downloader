@@ -152,6 +152,60 @@
   </section>
 
   <section class="card">
+    <h2>GitHub 国内访问 <span class="opt">免梯子</span></h2>
+    <p class="note">
+      开启后，浏览器访问 <code>github.com</code> 的页面会自动转到国内可用的整站镜像，能正常浏览仓库、Releases、代码、Issues。
+      只重定向「页面打开」这一种请求，<b>下载文件的请求完全不经过镜像</b>，仍旧走上面的线路池——所以下载速度和断点续传都不受影响。
+    </p>
+    <div class="line">
+      <label class="lab">开关</label>
+      <span>
+        <b>GitHub 国内访问</b>
+        <i>关闭时一切照旧，直接连 github.com。镜像站没有登录态，需要登录/上传时请先关掉。</i>
+      </span>
+      <button id="btnBoostSw" class="btn small ghost" style="flex:0 0 auto">未开启</button>
+    </div>
+    <div class="row" style="margin-top:0;flex-wrap:wrap">
+      <button id="btnSiteProbe" class="btn small">更新镜像池并探测</button>
+      <span id="siteInfo" class="note tiny">读取中…</span>
+    </div>
+    <div id="siteList" class="rlist"></div>
+    <p class="note tiny">点镜像名字可以固定使用它（星标），再点一次恢复自动挑选。自动模式会挑当前最快的那一个。</p>
+
+    <p class="note" style="margin-top:14px">
+      也可以填自己的镜像（自建反代或别的整站镜像），只填域名，例如 <code>https://gh.example.com</code>。
+    </p>
+    <div class="row" style="margin-top:0">
+      <input id="siteCustom" type="text" spellcheck="false" placeholder="https://gh.example.com" style="flex:1">
+      <button id="btnSiteSave" class="btn small">保存并测试</button>
+    </div>
+    <span id="siteMsg" class="note tiny"></span>
+
+    <details class="adv">
+      <summary>更稳的做法：自建加速节点（Cloudflare Worker，免费）</summary>
+      <p class="note tiny">
+        公益镜像随时可能限流、跑路或关站，这是别人家的服务，没法保证。用自己的 Worker
+        就没有这个问题：免费额度每天 10 万次请求，个人下载完全够用，速度和可用性都在自己手里。
+      </p>
+      <ol class="steps">
+        <li>打开 <a href="https://dash.cloudflare.com/?to=/:account/workers-and-pages" target="_blank" rel="noreferrer">Cloudflare Workers</a>，Create → Worker，名字随便起。</li>
+        <li>把下面这段代码整段粘进去（Edit code → 覆盖全部 → Deploy）。</li>
+        <li>把生成的地址 <code>https://xxx.yyy.workers.dev</code> 填到上面的「自定义镜像」，点「保存并测试」。</li>
+      </ol>
+      <textarea id="workerCode" rows="7" readonly spellcheck="false" placeholder="读取中…"></textarea>
+      <div class="row">
+        <button id="btnCopyWorker" class="btn small">复制完整代码</button>
+        <span id="workerMsg" class="note tiny"></span>
+      </div>
+      <p class="note tiny">
+        <b>workers.dev 这个域名在国内本身并不稳。</b>要用得久，请在 Worker 的
+        Settings → Domains &amp; Routes 里绑定一个自己的域名（域名可以托管在 Cloudflare，
+        也可以在别处只加一条 CNAME）。有自建节点 + 自己的域名，是目前最稳的免梯子方案。
+      </p>
+    </details>
+  </section>
+
+  <section class="card">
     <h2>安装到其他浏览器</h2>
     <ul class="list">
       <li><b>Chrome / Edge / Brave / 360 / QQ 浏览器</b>：打开 <code>chrome://extensions</code>（Edge 是 <code>edge://extensions</code>），

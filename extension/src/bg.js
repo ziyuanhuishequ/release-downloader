@@ -66,6 +66,8 @@ try {
 
 /* ---------------- GitHub API ---------------- */
 
+var API_STAGGER_MS = 350;    // 镜像通道相对直连的阶梯延迟
+
 function apiHint(code) {
   if (code === 404) return '仓库或版本不存在，也可能是私有仓库（可在设置里填 Token）';
   if (code === 403) return '请求太频繁（匿名每小时 60 次），可在设置里填 GitHub Token 提额';
@@ -77,13 +79,87 @@ function apiHint(code) {
 async function ghFetch(path, settings) {
   var headers = { 'Accept': 'application/vnd.github+json' };
   if (settings && settings.token) headers['Authorization'] = 'Bearer ' + settings.token;
-  var res = await fetch('https://api.github.com' + path, { headers: headers, cache: 'no-store' });
-  if (!res.ok) {
-    var err = new Error(apiHint(res.status));
-    err.status = res.status;
-    throw err;
+  var list = apiOrder();
+  var errs = [];
+  var left = list.length;
+  var done = false;
+
+  function fetchWithTimeout(url) {
+    var c = new AbortController();
+    var t = setTimeout(function () { try { c.abort(); } catch (e) {} }, 11000);
+    return fetch(url, { headers: headers, cache: 'no-store', signal: c.signal })
+      .then(function (r) { clearTimeout(t); return r; }, function (e) { clearTimeout(t); throw e; });
   }
-  return res.json();
+
+  return new Promise(function (resolve, reject) {
+    function giveUp() {
+      if (done) return;
+      done = true;
+      // 优先报「通道通了但请求本身报错」的原因，比网络错误更有信息量
+      var best = errs.filter(function (e) { return e.status >= 400 && e.status < 500; })[0] || errs[errs.length - 1] || {};
+      var e2 = new Error(best.msg
+        ? ('GitHub API 连不上：' + best.msg + '（直连和镜像都试过了，可在设置里填 Token 或自建节点）')
+        : 'GitHub API 连不上：直连和镜像都没通');
+      e2.status = best.status || 0;
+      reject(e2);
+    }
+
+    list.forEach(function (ch, i) {
+      // 直连先发，镜像按阶梯延后：直连正常时不会产生多余的镜像请求
+      setTimeout(function () {
+        if (done) return;
+        fetchWithTimeout(ch.base + path).then(function (res) {
+          if (done) return;
+          if (res.ok) {
+            return res.json().then(function (data) {
+              if (done) return;
+              done = true;
+              setApiChan(ch.base);
+              resolve(data);
+            }, function () {
+              errs.push({ msg: '返回内容不是 JSON', status: 0 });
+              if (--left <= 0) giveUp();
+            });
+          }
+          // 4xx 说明这条通道是通的，只是这次请求本身有问题，换通道也没用
+          if (res.status >= 400 && res.status < 500) {
+            done = true;
+            var e3 = new Error(apiHint(res.status));
+            e3.status = res.status;
+            reject(e3);
+            return;
+          }
+          errs.push({ msg: apiHint(res.status), status: res.status });
+          if (--left <= 0) giveUp();
+        }, function (err) {
+          if (done) return;
+          errs.push({ msg: (err && err.name === 'AbortError') ? '连接超时' : '网络不可达', status: 0 });
+          if (--left <= 0) giveUp();
+        });
+      }, i * API_STAGGER_MS);
+    });
+  });
+}
+
+/* 记住上次成功的 API 通道：下次同一条先试，省掉一次失败等待 */
+var apiChanCache = '';
+function setApiChan(base) {
+  if (apiChanCache === base) return;
+  apiChanCache = base;
+  try { EXT.storage.local.set({ apiChan: base }); } catch (e) {}
+}
+function apiOrder() {
+  var list = API_CHANNELS.slice();
+  if (!apiChanCache) return list;
+  var idx = -1;
+  list.forEach(function (c, i) { if (c.base === apiChanCache) idx = i; });
+  if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
+  return list;
+}
+/* 给界面用：这次的数据是不是从镜像拿的（直连正常时不需要提示） */
+function apiVia() {
+  if (!apiChanCache) return '';
+  return apiChanCache === API_BASE ? '' : (new URL(apiChanCache).host);
 }
 
 function normRelease(r, repo) {
@@ -116,6 +192,7 @@ async function listReleases(repo, perPage) {
   var arr = await ghFetch('/repos/' + clean + '/releases?per_page=' + (perPage || 20), settings);
   return {
     repo: clean,
+    via: apiVia(),
     releases: (arr || []).filter(function (r) { return !r.draft; }).map(function (r) { return normRelease(r, clean); })
   };
 }
@@ -133,7 +210,7 @@ async function listAssets(repo, tag) {
   } else {
     rel = out.releases.filter(function (r) { return !r.prerelease; })[0] || out.releases[0];
   }
-  return { repo: out.repo, release: rel, releases: out.releases.map(function (r) { return { tag: r.tag, name: r.name, prerelease: r.prerelease }; }) };
+  return { repo: out.repo, via: apiVia(), release: rel, releases: out.releases.map(function (r) { return { tag: r.tag, name: r.name, prerelease: r.prerelease }; }) };
 }
 
 /* ---------------- 线路池 + 线路健康度 ---------------- */
@@ -183,14 +260,363 @@ function noteRoute(prefix, ok, bps) {
   });
 }
 
+var lastSiteSig = '';
 async function refreshPool(force) {
   var r = await loadRoutePool(force);
-  if (r && r.pool) probeCache = null;   // 线路变了，旧的测速结果作废
+  if (r && r.pool) {
+    // 只有镜像名单真的变了才作废探活结果。
+    // 原来每次都清，导致 Service Worker 一重启弹窗就显示「检测中」。
+    var sig = POOL_SITES.map(function (x) { return x.base; }).join(',');
+    if (sig !== lastSiteSig) {
+      lastSiteSig = sig;
+      probeCache = null;
+      siteProbe = null;
+      try { await EXT.storage.local.remove('siteProbe'); } catch (e) {}
+    }
+  }
   return {
     info: POOL_INFO,
     from: r && r.from,
-    count: POOL_INFO ? POOL_INFO.count : 0
+    count: POOL_INFO ? POOL_INFO.count : 0,
+    sites: POOL_SITES.length
   };
+}
+
+/* 后台刷池：5 分钟内不重复，不挡任何用户操作 */
+var refreshingPool = null;
+function refreshPoolLazy(force) {
+  if (refreshingPool) return refreshingPool;
+  refreshingPool = (async function () {
+    try {
+      var meta = (await EXT.storage.local.get('poolMeta')).poolMeta || {};
+      if (!force && meta.lastForce && Date.now() - meta.lastForce < ROUTE_POOL_FORCE_GAP) return null;
+      var r = await refreshPool(true);
+      await EXT.storage.local.set({ poolMeta: { lastForce: Date.now() } });
+      return r;
+    } catch (e) {
+      return null;
+    } finally {
+      refreshingPool = null;
+    }
+  })();
+  return refreshingPool;
+}
+
+/* ---------------- GitHub 国内访问：整站镜像 ---------------- */
+
+var DNR_REDIRECT_ID = 9101;
+var DNR_ALLOW_ID = 9102;
+var MIRROR_SCRIPT_ID = 'gh-mirror';
+var SITE_PROBE_TTL = 10 * 60 * 1000;
+var siteProbe = null;         // {ts, list:[{name,base,ok,ms}]}
+
+/* 怎么判断「这个响应真的是 GitHub 页面」：
+ * GitHub 的 HTML 必定带 <html data-color-mode>、fluid-icon 或 octolytics，
+ * 而镜像自己的落地页 / Cloudflare 错误页都不带。三个特征里命中一个就算过，
+ * 比只看 data-color-mode 少漏判。 */
+var LOOKS_GITHUB = /data-color-mode|fluid-icon|octolytics|<title>[^<]*GitHub/i;
+
+/* 这些路径必须留在真 GitHub：镜像没有登录态，跳过去只会白屏。
+ * 注意：Chrome 对 DNR 正则有 2KB 编译内存上限，这里不能写太长（写成一大串
+ * 可选路径会被整条拒掉，连带另一条重定向规则一起失效）。 */
+var BOOST_ALLOW_RE = '^https?://(?:www\\.)?github\\.com/(?:login|logout|signup|join|session|settings|account)(?:/|\\?|$)';
+
+/* 规则只匹配 main_frame（页面导航）：
+ * - 页面里点链接、地址栏输入都会跳镜像
+ * - 下载请求（扩展发起 / xmlhttprequest / other）完全不受影响，仍走线路池
+ */
+function boostRules(site) {
+  // 裸路径型：镜像域名 + 原路径；前缀型：镜像域名 + 完整 github 地址
+  var sub = site.kind === 'prefix'
+    ? site.base + 'https://github.com/\\1'
+    : site.base + '/\\1';
+  return [
+    {
+      id: DNR_ALLOW_ID,
+      priority: 3,
+      action: { type: 'allow' },
+      condition: { regexFilter: BOOST_ALLOW_RE, resourceTypes: ['main_frame'] }
+    },
+    {
+      id: DNR_REDIRECT_ID,
+      priority: 2,
+      action: { type: 'redirect', redirect: { regexSubstitution: sub } },
+      condition: {
+        regexFilter: '^https?://(?:www\\.)?github\\.com/(.*)$',
+        resourceTypes: ['main_frame']
+      }
+    }
+  ];
+}
+
+async function applyBoost(enabled, site) {
+  var api = EXT.declarativeNetRequest;
+  if (!api || !api.updateDynamicRules) {
+    return { error: '此浏览器不支持请求重定向（Firefox 需 113 以上）' };
+  }
+  var s = site ? (typeof site === 'string' ? siteOfBase(site, null) : site) : null;
+  try {
+    await api.updateDynamicRules({
+      removeRuleIds: [DNR_REDIRECT_ID, DNR_ALLOW_ID],
+      addRules: (enabled && s) ? boostRules(s) : []
+    });
+    return { ok: true };
+  } catch (e) {
+    return { error: '规则写入失败：' + ((e && e.message) || e) };
+  }
+}
+
+/* 镜像域名是动态的，manifest 里的 content_scripts 写不死，注册/换站时动态注入。
+ * 注入 content.js 是为了让下载面板在镜像页上照样出现（路径结构和 github.com 一致）。 */
+async function syncMirrorScript(site) {
+  if (!EXT.scripting || !EXT.scripting.registerContentScripts) return false;
+  var reg = function (opt) { return EXT.scripting.registerContentScripts(opt); };
+  var base = site ? (typeof site === 'string' ? site : site.base) : '';
+  try {
+    var cur = await EXT.scripting.getRegisteredContentScripts({ ids: [MIRROR_SCRIPT_ID] });
+    if (cur && cur.length) await EXT.scripting.unregisterContentScripts({ ids: [MIRROR_SCRIPT_ID] });
+    if (!base) return true;
+    var spec = {
+      id: MIRROR_SCRIPT_ID,
+      matches: [siteBase(base) + '/*'],
+      js: ['src/common.js', 'src/content.js', 'src/mirror.js'],
+      runAt: 'document_idle'
+    };
+    try {
+      await reg([Object.assign({ persistAcrossSessions: true }, spec)]);
+    } catch (e) {
+      await reg([spec]);   // 老版本 Firefox 不认 persistAcrossSessions
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* 探活一个镜像：打一个真实仓库页，边读边判定，命中特征就断开。
+ * 判定用 GitHub 页面 <html data-color-mode=...> —— 它出现在前 200 字节里，
+ * 比找 <title> 稳（GitHub 页面开头有一大段空行和样式，title 可能靠后）。
+ * 镜像自己的落地页 / Cloudflare 错误页都不带这个标记，不会误判成可用。 */
+async function probeOneSite(site) {
+  var t0 = Date.now();
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 4500);
+  try {
+    var res = await fetch(siteUrl(site, 'https://github.com/octocat/Hello-World'), {
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: ctrl.signal
+    });
+    var head = '';
+    var ok = false;
+    if (res.ok) {
+      if (res.body && res.body.getReader) {
+        var rd = res.body.getReader();
+        var dec = new TextDecoder();
+        for (var i = 0; i < 3; i++) {            // 最多读 3 块，通常第一块就命中
+          var chunk = await rd.read();
+          if (!chunk || chunk.done || !chunk.value) break;
+          head += dec.decode(chunk.value, { stream: true });
+          if (LOOKS_GITHUB.test(head)) { ok = true; break; }
+        }
+        try { rd.cancel(); } catch (e) {}
+      } else {
+        head = String(await res.text()).slice(0, 8192);
+        ok = LOOKS_GITHUB.test(head);
+      }
+    }
+    clearTimeout(timer);
+    return { name: site.name, base: site.base, kind: site.kind, ok: ok, ms: Date.now() - t0 };
+  } catch (e) {
+    clearTimeout(timer);
+    return { name: site.name, base: site.base, kind: site.kind, ok: false, ms: 0 };
+  }
+}
+
+async function probeSites(force) {
+  if (!force) {
+    if (!siteProbe) {
+      try { siteProbe = (await EXT.storage.local.get('siteProbe')).siteProbe || null; } catch (e) {}
+    }
+    if (siteProbe && Date.now() - (siteProbe.ts || 0) < SITE_PROBE_TTL) return siteProbe;
+  }
+  var st = await getSettings();
+  var list = allSites(st);
+  var res = await Promise.all(list.map(probeOneSite));
+  res.sort(function (a, b) {
+    if (a.ok !== b.ok) return a.ok ? -1 : 1;
+    return a.ms - b.ms;
+  });
+  siteProbe = { ts: Date.now(), list: res };
+  try { await EXT.storage.local.set({ siteProbe: siteProbe }); } catch (e) {}
+  return siteProbe;
+}
+
+/* 只读缓存，永不阻塞：界面先拿上次的结论把 UI 画出来 */
+async function siteProbeCached() {
+  if (siteProbe) return siteProbe;
+  try { siteProbe = (await EXT.storage.local.get('siteProbe')).siteProbe || null; } catch (e) {}
+  return siteProbe;
+}
+
+/* 后台探活，同一时刻只跑一份；完成后顺手把挂掉的镜像换掉 */
+var probingSites = null;
+function siteProbeLazy(force) {
+  if (probingSites) return probingSites;
+  probingSites = probeSites(!!force)
+    .then(function (p) { healBoost(p); return p; })
+    .catch(function () { return null; })
+    .then(function (p) { probingSites = null; return p; });
+  return probingSites;
+}
+
+/* 当前正在用的镜像挂了就静默换一个还能用的。
+ * 放在后台做（不是等用户打开弹窗才做），下次开页面就不会白屏。 */
+async function healBoost(probe) {
+  try {
+    var s = await getSettings();
+    if (!s.ghBoost) return;
+    var raw = s.ghSite || s.ghSiteCache;
+    if (!raw) return;
+    var cur = siteOfBase(raw, s);
+    var list = (probe && probe.list) || [];
+    var hit = list.filter(function (x) { return x.base === cur.base; })[0];
+    if (!hit || hit.ok) return;                    // 没测到 / 还活着
+    var next = list.filter(function (x) { return x.ok && x.base !== cur.base; })[0];
+    if (!next) return;                             // 全挂：保持现状，用户至少还能手点
+    var site = { name: next.name, base: next.base, kind: next.kind };
+    var r = await applyBoost(true, site);
+    if (r && r.error) return;
+    await syncMirrorScript(site);
+    await saveSettings({ ghSiteCache: site.base });
+  } catch (e) { /* 静默 */ }
+}
+
+/* 首次开启用：谁先探通就用谁，不必等全部 9 个都超时 */
+async function pickSiteFast(settings) {
+  var sub = settings || await getSettings();
+  if (sub.ghSite) {
+    var pin = siteOfBase(sub.ghSite, sub);
+    if (pin) return { site: pin, pinned: true };
+  }
+  var list = allSites(sub);
+  var cached = sub.ghSiteCache;
+  // 上次用过的那台排最前：多数情况下它还活着，能立刻返回
+  list = list.slice().sort(function (a, b) {
+    return (b.base === cached ? 1 : 0) - (a.base === cached ? 1 : 0);
+  });
+  return new Promise(function (resolve) {
+    var settled = false;
+    var left = list.length;
+    var results = [];
+    if (!left) { resolve({ site: null }); return; }
+    list.forEach(function (site) {
+      probeOneSite(site).then(function (r) {
+        results.push(r);
+        if (!settled && r.ok) {
+          settled = true;
+          resolve({ site: { name: r.name, base: r.base, kind: r.kind }, ms: r.ms });
+        }
+        if (--left <= 0 && !settled) { settled = true; resolve({ site: null }); }
+      }, function () {
+        if (--left <= 0 && !settled) { settled = true; resolve({ site: null }); }
+      });
+    });
+  });
+}
+
+/* 选镜像：手动固定 > 上次用的（还活着就继续用，避免每次换域名）> 最快可用 */
+async function pickSite(settings, force) {
+  var s = settings || await getSettings();
+  if (s.ghSite) {
+    var pin = siteOfBase(s.ghSite, s);
+    if (pin) return { site: pin, pinned: true, probe: siteProbe };
+  }
+  var probe = await probeSites(force);
+  var ok = probe.list.filter(function (x) { return x.ok; });
+  if (!ok.length) return { site: null, probe: probe };
+  var cached = s.ghSiteCache;
+  var keep = ok.filter(function (x) { return cached && x.base === cached; })[0];
+  var pick = keep || ok[0];
+  return { site: { name: pick.name, base: pick.base, kind: pick.kind }, probe: probe };
+}
+
+/* 状态面板：只用缓存立刻回，过期就在后台补一次，绝不让弹窗卡在探测上 */
+async function boostState() {
+  var s = await getSettings();
+  var probe = await siteProbeCached();
+  if (!probe || Date.now() - (probe.ts || 0) > SITE_PROBE_TTL) siteProbeLazy(false);
+
+  var raw = s.ghSite || s.ghSiteCache;
+  var site = null;
+  if (raw) {
+    var st = siteOfBase(raw, s);
+    var hit = ((probe && probe.list) || []).filter(function (x) {
+      return x.base === st.base || x.name === st.name;
+    })[0];
+    site = {
+      name: st.name,
+      base: st.base,
+      kind: st.kind,
+      ok: hit ? hit.ok : null,
+      ms: hit ? hit.ms : 0
+    };
+  }
+  return {
+    on: !!s.ghBoost,
+    site: site,
+    pinned: s.ghSite || '',
+    sites: (probe && probe.list) || [],
+    checking: !probe || Date.now() - (probe.ts || 0) > SITE_PROBE_TTL
+  };
+}
+
+async function setBoost(on) {
+  var s = await getSettings();
+  if (!on) {
+    await applyBoost(false, '');
+    await syncMirrorScript('');
+    await saveSettings({ ghBoost: false });
+    return { on: false };
+  }
+
+  // 线路池刷新放后台：等它跑完再开开关，用户会以为按钮坏了
+  refreshPoolLazy();
+
+  // 快路径：有上次用过的镜像就直接生效，通常 100ms 内完成，后台再复核换线
+  var quick = s.ghSite ? siteOfBase(s.ghSite, s)
+    : (s.ghSiteCache ? siteOfBase(s.ghSiteCache, s) : null);
+  if (quick) {
+    await ensureSitePerms([quick]);
+    var rq = await applyBoost(true, quick);
+    if (!rq.error) {
+      await syncMirrorScript(quick);
+      await saveSettings({ ghBoost: true, ghSiteCache: quick.base });
+      siteProbeLazy(true);                       // 后台确认它还活着，挂了自动换
+      return { on: true, site: quick, quick: true };
+    }
+  }
+
+  // 首次开启（或上次那个写规则失败）：探到第一个能用的就上
+  var picked = await pickSiteFast(s);
+  if (!picked.site) {
+    await new Promise(function (r) { setTimeout(r, 700); });
+    picked = await pickSiteFast(s);
+  }
+  if (!picked.site) {
+    var pr = await siteProbeCached();
+    return {
+      error: '镜像全部连不上，先保持直连。可在设置里填一个能用的镜像地址，或稍后再试（镜像会随线路池实时更新）。',
+      sites: (pr && pr.list) || []
+    };
+  }
+  await ensureSitePerms([picked.site]);
+  var r = await applyBoost(true, picked.site);
+  if (r && r.error) return r;
+  await syncMirrorScript(picked.site);
+  await saveSettings({ ghBoost: true, ghSiteCache: picked.site.base });
+  siteProbeLazy(true);
+  return { on: true, site: picked.site, ms: picked.ms };
 }
 
 /* ---------------- 线路测速 ---------------- */
@@ -857,7 +1283,13 @@ async function startTask(task, settings) {
     // 选线期间用户可能点了暂停/取消：别把它又拽回「下载中」
     if (task.status !== 'probing') { updateBadge(); pump(); return; }
     var route = order[task.routeIdx % order.length];
-    var check = settings.autoProbe ? await preflight(route, task.url) : { ok: true };
+    var size0 = task.size || task.total || 0;
+    var segCap0 = (settings.segMaxMB || 128) * 1024 * 1024;
+    var willSeg = settings.segEnabled !== false && !task.segFailed &&
+      size0 > 1024 * 1024 && size0 <= segCap0;
+    // 分片下载自带失败回退（发不出 Range 会自动改单连接），不必再单独探一字节；
+    // 省掉这次往返，批量下载的启动能快好几百毫秒。
+    var check = (settings.autoProbe && !willSeg) ? await preflight(route, task.url) : { ok: true };
     if (task.status !== 'probing') { updateBadge(); pump(); return; }
     if (!check.ok) {
       task.error = '线路 ' + route.name + '：' + (check.code === 'html' ? '返回网页而非文件' : check.code);
@@ -889,9 +1321,7 @@ async function startTask(task, settings) {
     task.slowSince = 0;
     task._sp = null;
     // 能分片就分片：多线程拉同一文件，小文件走浏览器单连接就好
-    var size = task.size || task.total || 0;
-    var segCap = (settings.segMaxMB || 128) * 1024 * 1024;
-    if (settings.segEnabled !== false && !task.segFailed && size > 1024 * 1024 && size <= segCap) {
+    if (willSeg) {
       if (await startSegmented(task, route, settings, order)) {
         if (task.pauseWanted) {
           task.pauseWanted = false;
@@ -1086,6 +1516,60 @@ onMessage(function (msg, sender, respond) {
           respond(rp);
           break;
         }
+        case 'boost-state':
+          respond(await boostState());
+          break;
+        case 'boost-set':
+          respond(await setBoost(!!msg.on));
+          break;
+        case 'boost-probe':
+          respond({ list: (await probeSites(true)).list });
+          break;
+        case 'boost-site': {
+          var s3a = await getSettings();
+          var want3 = String(msg.base || '').trim();
+          var site3 = want3 ? siteOfBase(want3, s3a) : null;
+          await saveSettings({ ghSite: site3 ? site3.base : '' });
+          var s3 = await getSettings();
+          var info = { ok: true };
+          if (s3.ghBoost) {
+            var p3 = site3 ? { site: site3 } : await pickSite(s3, true);
+            if (p3.site) {
+              await ensureSitePerms([p3.site]);
+              var r3 = await applyBoost(true, p3.site);
+              if (r3 && r3.error) info.error = r3.error;
+              await syncMirrorScript(p3.site);
+              await saveSettings({ ghSiteCache: p3.site.base });
+              info.site = p3.site;
+            } else {
+              info.error = '这个镜像连不上';
+            }
+          }
+          info.state = await boostState();
+          respond(info);
+          break;
+        }
+        /* 开关刚打开时，把当前这个 github.com 标签直接换到镜像，用户不用手动刷新 */
+        case 'boost-current': {
+          var s4 = await getSettings();
+          var site4 = s4.ghSiteCache ? siteOfBase(s4.ghSiteCache, s4)
+            : (s4.ghSite ? siteOfBase(s4.ghSite, s4) : null);
+          if (!s4.ghBoost || !site4) { respond({ ok: false, reason: 'off' }); break; }
+          var tabs4 = await EXT.tabs.query({ active: true, lastFocusedWindow: true });
+          var t4 = tabs4 && tabs4[0];
+          if (!t4 || !t4.url) { respond({ ok: false, reason: 'no-tab' }); break; }
+          if (!/^https?:\/\/(www\.)?github\.com\//i.test(t4.url)) {
+            respond({ ok: false, reason: 'not-github' });
+            break;
+          }
+          var target = siteUrl(site4, t4.url);
+          // 刚注册的镜像 content script 需要一拍才生效，等一下再跳，否则这个标签
+          // 会缺右下角面板（新开的标签不受影响）
+          await new Promise(function (r) { setTimeout(r, 400); });
+          await EXT.tabs.update(t4.id, { url: target });
+          respond({ ok: true, url: target, site: site4 });
+          break;
+        }
         case 'enqueue':
           respond(await enqueue(msg.items || []));
           break;
@@ -1265,8 +1749,38 @@ try {
 
 /* 启动时把线路池刷一遍（走缓存，12 小时内不重复请求），顺手恢复线路健康度 */
 (async function boot() {
+  try {
+    var got = await EXT.storage.local.get(['apiChan']);
+    if (got && got.apiChan) apiChanCache = got.apiChan;
+  } catch (e) {}
   try { await loadStats(); } catch (e) {}
   try { await refreshPool(false); } catch (e) {}
+})();
+
+/* GitHub 访问开关状态对齐：动态规则会跟着浏览器留到下次启动，
+ * 但用户可能换过镜像、或上次用的镜像已经挂了，这里重新算一次。 */
+(async function bootBoost() {
+  try {
+    var s = await getSettings();
+    if (!s.ghBoost) {
+      await applyBoost(false, '');
+      await syncMirrorScript('');
+      return;
+    }
+    var raw = s.ghSite || s.ghSiteCache;
+    var site = raw ? siteOfBase(raw, s) : null;
+    if (!site) {
+      // 开关是开的但没记住站点（换过配置之类）：重新挑一个
+      var pf = await pickSiteFast(s);
+      site = pf.site;
+      if (!site) return;
+      await saveSettings({ ghSiteCache: site.base });
+    }
+    // 先把规则装上（保证用户立刻能开页面），再后台复核它是否还活着
+    await applyBoost(true, site);
+    await syncMirrorScript(site);
+    siteProbeLazy(true);
+  } catch (e) {}
 })();
 
 updateBadge();
