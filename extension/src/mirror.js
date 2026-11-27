@@ -87,7 +87,7 @@
     toast.className = 'toast';
     toast.innerHTML =
       '<span class="dot"></span>' +
-      '<span class="tx">已通过国内镜像 <b>' + location.host + '</b> 打开 GitHub<i> · 下载请用右下角面板</i></span>' +
+      '<span class="tx">已通过国内镜像 <b>' + location.host + '</b> 打开 GitHub<i> · 下载文件会自动走加速线路，不经过镜像</i></span>' +
       '<button class="btn" data-act="back">切回原站</button>' +
       '<button class="btn" data-act="close">知道了</button>';
     slot.appendChild(toast);
@@ -140,19 +140,36 @@
     });
   }
 
-  /* 3) 镜像页上点 Release 资源：交给右下角面板走加速线路
-   *    镜像站直接下大文件通常只有一条连接还限速；扩展这边能分片 + 多线路换。
-   *    只在内容脚本确实注入了才拦，否则点了没反应反而更糟。 */
-  if (window.__ghdlInjected) {
-    document.addEventListener('click', function (e) {
-      var a = e.target.closest && e.target.closest('a[href*="/releases/download/"]');
-      if (!a) return;
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;  // 保留「新标签打开」
-      e.preventDefault();
-      e.stopPropagation();
-      try { window.dispatchEvent(new CustomEvent('ghdl-open-panel')); } catch (err) {}
-    }, true);
+  /* 3) 镜像页上点 Release 资源：一律交给扩展的加速通道
+   *    镜像站下大文件通常只有一条连接、还常被限速，很慢；扩展这边是线路池 + 分片 + 换线。
+   *    拦下来后由 content.js 直接把这个文件丢进下载队列（地址会先归一化回 github.com），
+   *    用户不用再在面板里点一次「下载」。
+   *    万一面板没接住（内容脚本还没注入/刚更新没重载），就退回原来的跳转，
+   *    宁可慢一点，也不能让用户点了没反应。 */
+  function takeDownload(e) {
+    if (e.defaultPrevented) return;
+    // 带修饰键的保留浏览器自己的行为（Ctrl+点击 = 新标签）
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target && e.target.closest && e.target.closest('a[href*="/releases/download/"]');
+    if (!a || !a.href) return;
+    window.__ghdlAck = 0;
+    try {
+      window.dispatchEvent(new CustomEvent('ghdl-open-panel', {
+        detail: { href: a.href, auto: true }
+      }));
+    } catch (err) {}
+    if (!window.__ghdlAck) return;       // 面板没接住 → 走原跳转
+    e.preventDefault();
+    e.stopPropagation();
+    hideToast();
   }
+  document.addEventListener('click', function (e) {
+    if (e.button === 0) takeDownload(e);
+  }, true);
+  // 中键也算「我要下这个文件」，别让它开一个新标签慢慢下
+  document.addEventListener('auxclick', function (e) {
+    if (e.button === 1) takeDownload(e);
+  }, true);
 
   /* 4) 页内链接改写
    * 两类镜像的链接形态不一样：

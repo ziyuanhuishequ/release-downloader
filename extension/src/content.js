@@ -22,6 +22,8 @@
     tasks: [],
     probe: null,
     error: '',
+    flash: '',         // 一次性提示（比如「已开始加速下载：xxx」）
+    flashBad: false,
     panel: null,
     host: null,
     promoTimer: 0,
@@ -123,7 +125,9 @@
     '.rline.pref{background:#FFF1DE}',
     '.rline.rhead{background:#F7F2E4;font-weight:700;color:#5B5F70;cursor:default}',
     '.rfoot{display:flex;align-items:center;gap:8px;padding:4px 8px;font-size:10.5px;color:#5B5F70}',
-    '.rfoot .lk{margin-left:auto}'
+    '.rfoot .lk{margin-left:auto}',
+    '.fl{padding:6px 10px;background:#EAFBF4;border-bottom:2px solid #1A1E30;font-size:11.5px;font-weight:700;color:#087458;line-height:1.4}',
+    '.fl.bad{background:#FDEBE5;color:#782814}'
   ].join('');
 
   function esc(s) {
@@ -494,6 +498,7 @@
           '<div class="bar">' + filters +
             '<span class="cnt">' + picked.length + '/' + state.assets.length + ' 已选</span>' +
           '</div>' +
+          (state.flash ? '<div class="fl' + (state.flashBad ? ' bad' : '') + '">' + esc(state.flash) + '</div>' : '') +
           '<div id="qwrap">' + queueHtml() + '</div>' +
           body +
           '<div class="ft">' +
@@ -501,7 +506,7 @@
             (state.showRoutes ? routeListHtml() : '') +
             '<button class="go" id="go"' + (picked.length ? '' : ' disabled') + '>下载 ' + picked.length + ' 个文件' +
               (pickedSize ? '（' + fmtSize(pickedSize) + '）' : '') + '</button>' +
-            (onMirror ? '<div class="mir">经镜像 ' + esc(location.host) + ' 访问 · <span class="lk" id="backGh">切回 GitHub 原站</span></div>' : '') +
+            (onMirror ? '<div class="mir">经镜像 ' + esc(location.host) + ' 访问 · 下载走加速线路、不经过镜像 · <span class="lk" id="backGh">切回 GitHub 原站</span></div>' : '') +
             '<div class="tip">保存到「下载/GitHub/仓库/版本」，可在扩展设置里关掉归档</div>' +
           '</div>' +
         '</div>'
@@ -688,21 +693,78 @@
     render();
   }
 
+  /* 面板里的一行提示，几秒后自己消失 */
+  function flash(text, bad) {
+    state.flash = text || '';
+    state.flashBad = !!bad;
+    if (state.host) render();
+    setTimeout(function () {
+      state.flash = '';
+      state.flashBad = false;
+      if (state.host) render();
+    }, 7000);
+  }
+
+  /* 「点了某个文件就下这一个」：镜像页上点资源链接、右键菜单、后台兜底都走这里。
+   * 关键一步是把地址归一化回 github.com —— 线路池是拿 github.com 地址拼前缀的，
+   * 拿镜像地址进去会拼成「镜像套镜像」，那正是慢的来源。
+   * 不在页面上的文件也能下，所以不依赖 assets 列表先加载完。 */
+  async function autoDownload(href) {
+    var url = ghCanonical(href);
+    var p = parseAssetUrl(url);
+    if (!p) {
+      if (!state.assets.length && !state.loading) loadAssets();
+      return false;
+    }
+    state.open = true;
+    render();
+    startPoll();
+    var settings = await getSettings();
+    var res = await bgSend('enqueue', {
+      items: [{
+        url: url,
+        asset: p.asset,
+        owner: p.owner,
+        repo: p.repo,
+        tag: p.tag,
+        path: buildPath({ owner: p.owner, repo: p.repo, tag: p.tag, asset: p.asset }, settings)
+      }]
+    });
+    var st = await bgSend('state', {});
+    if (st && st.tasks) state.tasks = st.tasks;
+    if (res && res.error) {
+      flash('加入下载失败：' + res.error, true);
+      return false;
+    }
+    if (res && res.blocked) flash('「' + p.asset + '」已经在下载队列里了');
+    else if (res && res.added) flash('已交给加速线路下载：' + p.asset + '（不经过镜像，可断点续传）');
+    else flash('「' + p.asset + '」没能加入队列，换个镜像或稍后再试', true);
+    render();
+    return !!(res && res.added);
+  }
+
   try {
     EXT.runtime.onMessage.addListener(function (msg) {
       if (msg && msg.type === 'open-panel') {
         state.open = true;
         render();
+        startPoll();
+        if (msg.auto) { autoDownload(msg.auto); return; }   // 后台兜底拦下来的下载
         if (!state.assets.length) loadAssets();
       }
     });
   } catch (e) {}
 
-  /* 镜像页上点了 Release 资源链接：mirror.js 拦下来后走这里，直接弹出面板 */
-  window.addEventListener('ghdl-open-panel', function () {
+  /* 镜像页上点了 Release 资源链接：mirror.js 拦下来后走这里。
+   * 不再只是「打开面板」——直接把点到的那个文件交给加速通道下载，一步到位。 */
+  window.addEventListener('ghdl-open-panel', function (ev) {
+    var d = (ev && ev.detail) || {};
+    window.__ghdlAck = 1;              // 告诉 mirror.js 我们接住了，可以拦掉默认跳转
     state.open = true;
+    if (!state.host || !state.host.parentNode) { try { mount(); } catch (e) {} }
     render();
     startPoll();
+    if (d.href) { autoDownload(d.href); return; }
     if (!state.assets.length && !state.loading) loadAssets();
     else if (!state.probe) probeBest();
   });

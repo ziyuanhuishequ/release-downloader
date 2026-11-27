@@ -1182,6 +1182,7 @@ async function onSegDone(m) {
   task.blobUrl = m.url;
   if (m.total) { task.total = m.total; task.size = task.size || m.total; }
   try {
+    markOurDownload(m.url);      // blob: 地址，登记一下更保险
     var id = await EXT.downloads.download({
       url: m.url,
       filename: task.path,
@@ -1218,20 +1219,97 @@ function onSegError(m) {
   pump();
 }
 
+/* ---------------- 兜底：下载绝不落到镜像上 ---------------- */
+
+/* 扩展自己发起的下载先登记（地址做一次解码归一，浏览器可能把 %xx 等重新编码），
+ * onCreated 里据此跳过，绝不误杀自己的任务。 */
+var ourDownloadUrls = new Set();
+function normDlUrl(u) {
+  try { return decodeURI(new URL(u).href); } catch (e) { return String(u || ''); }
+}
+function markOurDownload(url) {
+  var k = normDlUrl(url);
+  if (!k) return;
+  ourDownloadUrls.add(k);
+  setTimeout(function () { ourDownloadUrls.delete(k); }, 30000);
+}
+function isOurRouteUrl(u) {
+  var key = normDlUrl(u);
+  return tasks.some(function (t) {
+    if (t.status !== 'downloading' && t.status !== 'probing') return false;
+    if (!t.routePrefix) return false;
+    return normDlUrl(routeUrl({ prefix: t.routePrefix }, t.url)) === key;
+  });
+}
+
+/* 镜像域名上的 Release 文件地址 → github.com 原地址（其它地址返回空） */
+async function mirrorAssetToGithub(u) {
+  try {
+    var url = new URL(u);
+    if (!/^https?:$/.test(url.protocol)) return '';
+    if (!/\/releases\/download\//i.test(url.pathname)) return '';
+    var s = await getSettings();
+    if (!isMirrorHost(url.host, s)) return '';
+    var gh = ghCanonical(url.href);
+    if (!gh || gh === url.href) return '';
+    return gh;
+  } catch (e) {
+    return '';
+  }
+}
+
+/* 通知当前标签的内容脚本：打开面板，并把这个文件直接加进下载队列 */
+function notifyAutoDownload(gh) {
+  try {
+    EXT.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      var t = tabs && tabs[0];
+      if (!t || !t.id) return;
+      try {
+        EXT.tabs.sendMessage(t.id, { type: 'open-panel', auto: gh }, function () { void EXT.runtime.lastError; });
+      } catch (e) {}
+    });
+  } catch (e) {}
+}
+
+/* 浏览器自己从镜像开始了下载（新标签打开、脚本没拦住、镜像页面的直链等）：
+ * 立刻取消，改由扩展按线路池 + 分片重下 —— 镜像直连又慢又不能续传。
+ * 只认「镜像域名 + /releases/download/」，扩展自己的下载已在上面登记，不会误伤。 */
+try {
+  if (EXT.downloads && EXT.downloads.onCreated) {
+    EXT.downloads.onCreated.addListener(function (item) {
+      if (!item || !item.url || item.id == null) return;
+      var key = normDlUrl(item.url);
+      if (ourDownloadUrls.has(key)) return;
+      if (isOurRouteUrl(item.url)) return;
+      mirrorAssetToGithub(item.url).then(function (gh) {
+        if (!gh) return;
+        try { EXT.downloads.cancel(item.id, function () { void EXT.runtime.lastError; }); } catch (e) {}
+        try { EXT.downloads.erase({ id: item.id }, function () { void EXT.runtime.lastError; }); } catch (e) {}
+        enqueue([{ url: gh }]);
+        notifyAutoDownload(gh);
+      }).catch(function () {});
+    });
+  }
+} catch (e) {}
+
 async function enqueue(items) {
   var settings = await getSettings();
   var added = 0;
   items.forEach(function (it) {
     if (!it || !it.url) return;
+    /* 队列里的地址一律是 github.com 原地址：
+     * 线路池是「前缀 + github 地址」拼出来的，如果这里混进镜像地址，
+     * 就会拼成 https://gh-proxy.com/https://gh-proxy.at9.net/... 这种套娃，又慢又容易失败。 */
+    var url = ghCanonical(it.url);
     var dup = tasks.some(function (t) {
-      return t.url === it.url && (t.status === 'queued' || t.status === 'downloading' ||
+      return t.url === url && (t.status === 'queued' || t.status === 'downloading' ||
         t.status === 'probing' || t.status === 'paused');
     });
     if (dup) return;
-    var p = parseAssetUrl(it.url) || {};
+    var p = parseAssetUrl(url) || {};
     pushTask({
       id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      url: it.url,
+      url: url,
       name: it.asset || p.asset || 'download.bin',
       path: it.path || buildPath({
         owner: it.owner || p.owner,
@@ -1332,8 +1410,10 @@ async function startTask(task, settings) {
         return;
       }
     }
+    var dlUrl = routeUrl(route, task.url);
+    markOurDownload(dlUrl);      // 这条是我们自己发起的：onCreated 兜底千万别拦
     var id = await EXT.downloads.download({
-      url: routeUrl(route, task.url),
+      url: dlUrl,
       filename: task.path,
       conflictAction: task.tries > 0 ? 'overwrite' : 'uniquify',
       saveAs: false

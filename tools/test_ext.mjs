@@ -9,10 +9,12 @@ import vm from 'vm';
 
 const store = {};
 const noop = () => {};
+const canceledIds = [];
+let onCreatedFn = null;
 const chrome = {
   runtime: {
     onMessage: { addListener: noop }, onInstalled: { addListener: noop },
-    onStartup: { addListener: noop }, lastError: null, getManifest: () => ({ version: '1.4.0' }),
+    onStartup: { addListener: noop }, lastError: null, getManifest: () => ({ version: '1.4.1' }),
     sendMessage: noop, openOptionsPage: noop, getURL: (p) => 'chrome-extension://x/' + p
   },
   storage: {
@@ -30,7 +32,14 @@ const chrome = {
     onChanged: { addListener: noop }
   },
   action: { setBadgeText: noop, setBadgeBackgroundColor: noop },
-  downloads: { onChanged: { addListener: noop }, search: noop, download: async () => 1, cancel: noop, pause: noop, resume: noop, erase: noop },
+  downloads: {
+    onChanged: { addListener: noop },
+    onCreated: { addListener: (fn) => { onCreatedFn = fn; } },
+    search: noop, download: async () => 1,
+    cancel: (id, cb) => { canceledIds.push(id); if (cb) cb(); },
+    pause: noop, resume: noop,
+    erase: (q, cb) => { if (cb) cb(); }
+  },
   notifications: { create: noop },
   permissions: { contains: async () => true, request: async () => true },
   tabs: { query: async () => [], create: noop, update: noop },
@@ -182,6 +191,44 @@ const fast = await ctx.pickSiteFast(store.settings);
 const fms = Date.now() - f0;
 ok('探到第一个可用就返回（<1.5s）', fms < 1500, fms + 'ms');
 ok('选中的是能用的那台', fast.site && fast.site.base === 'https://gh-proxy.at9.net', JSON.stringify(fast.site));
+
+/* ---------- 9. 下载永远不落到镜像上 ---------- */
+console.log('\n[9] 镜像页下载自动切快速方案');
+ctx.fetch = async () => { await new Promise((r) => globalThis.setTimeout(r, 60_000)); return new Response('', { status: 200 }); };
+ctx.tasks.length = 0;
+const mirrorAsset = 'https://gh-proxy.at9.net/a/b/releases/download/v1.0.0/x.zip';
+const q1 = await ctx.enqueue([{ url: mirrorAsset }]);
+const t1 = ctx.tasks[0];
+ok('入队时把镜像地址归一化回 github.com', t1 && t1.url === 'https://github.com/a/b/releases/download/v1.0.0/x.zip', t1 && t1.url);
+ok('文件名和版本从地址里解析出来了', t1 && t1.name === 'x.zip', t1 && t1.name);
+ok('确实加进了队列', q1.added === 1, JSON.stringify(q1));
+
+ctx.tasks.length = 0;
+canceledIds.length = 0;
+onCreatedFn({
+  id: 77,
+  url: 'https://cors.isteed.cc/https://github.com/a/b/releases/download/v1.0.0/y.tar.gz',
+  finalUrl: ''
+});
+await new Promise((r) => globalThis.setTimeout(r, 120));
+ok('浏览器自己从镜像开始的下载被取消', canceledIds.indexOf(77) >= 0, canceledIds.join());
+ok('改由扩展重新入队（github 地址）',
+  ctx.tasks.some((t) => t.url === 'https://github.com/a/b/releases/download/v1.0.0/y.tar.gz'),
+  ctx.tasks.map((t) => t.url).join(' | '));
+
+// 扩展自己发起的下载（线路池也会用到同一批镜像域名）不能被误杀
+canceledIds.length = 0;
+const ourUrl = 'https://cors.isteed.cc/https://github.com/a/b/releases/download/v1.0.0/z.zip';
+ctx.markOurDownload(ourUrl);
+onCreatedFn({ id: 88, url: ourUrl });
+await new Promise((r) => globalThis.setTimeout(r, 80));
+ok('扩展自己发起的下载不会被误取消', canceledIds.indexOf(88) < 0, canceledIds.join());
+
+// 非 Release 文件（比如镜像页面上的头像、css）一概不碰
+canceledIds.length = 0;
+onCreatedFn({ id: 99, url: 'https://gh-proxy.at9.net/a/b/archive/refs/heads/main.zip' });
+await new Promise((r) => globalThis.setTimeout(r, 80));
+ok('非 release 资源的下载不干预', canceledIds.indexOf(99) < 0, canceledIds.join());
 
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

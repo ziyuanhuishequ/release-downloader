@@ -37,6 +37,11 @@ Thumbs.db
 /extension.crx
 /_cprof/
 
+# 本地测试依赖（tools/test_dom.mjs 需要 jsdom：npm i jsdom --no-save）
+/node_modules/
+/package.json
+/package-lock.json
+
 # 扩展测试脚手架（本地跑 CDP 用，不进仓库）
 /_cdp.mjs
 /_reload.mjs

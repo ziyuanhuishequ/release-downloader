@@ -15,7 +15,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.4.0-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.4.1-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -25,7 +25,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.4.0-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.4.1-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -70,6 +70,10 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
   和 `前缀型`（`https://镜像域名/https://github.com/owner/repo`，如 `cors.isteed.cc`）。
 - **下载完全不受影响**：重定向规则只作用于「页面打开」（`main_frame`），
   扩展发起的下载、分片 Range 请求都不经过镜像，仍旧走线路池。
+- **在镜像页点文件 = 走快速通道**：点 Release 里的文件名，扩展会把这次下载接过来，
+  自动切回线路池 + 分片 + 失败换线，不会顺着镜像那条单连接慢速直连下（面板里会提示
+  「已交给加速线路下载」）。中键点开同样会被接管；如果脚本没拦住，后台也会把镜像下载
+  取消掉再改走快速通道，所以下载永远落在快速方案上。
 - 登录 / 设置 / 上传这类需要账号的路径不会被转走（镜像没有登录态），会留在真 GitHub。
 - 镜像池在仓库的 `routes.json` 里（`sites` 字段），2 小时自动更新、开开关时强制刷新；
   后台每 10 分钟复核一次正在用的镜像，挂了就静默换一台；全都不通时保持直连。
