@@ -631,6 +631,34 @@
     return false;
   }
 
+  /* 装错包：Chrome 里装了 Firefox 版（或反过来）。
+   * Chrome 的 Firefox 版清单里没有 offscreen 权限，多线程分片会直接退化成单线程，
+   * 用户只会感觉「开了国内访问下载就变慢了」。这里把原因直接说清楚。 */
+  function pkgMismatch() {
+    try {
+      var m = EXT.runtime.getManifest();
+      var perms = m.permissions || [];
+      var bg = m.background || {};
+      if (!IS_FF && !bg.service_worker) return 'ff-in-chrome';
+      if (!IS_FF && perms.indexOf('offscreen') < 0) return 'ff-in-chrome';
+      if (IS_FF && !bg.scripts) return 'chrome-in-ff';
+    } catch (e) {}
+    return '';
+  }
+
+  function showPkgBanner(kind) {
+    if (document.getElementById('pkgBanner')) return;
+    var d = document.createElement('div');
+    d.id = 'pkgBanner';
+    d.className = 'bgbanner pkg';
+    d.innerHTML = kind === 'chrome-in-ff'
+      ? '<b>装的是 Chrome 版扩展，当前浏览器是 Firefox</b>' +
+        '<div class="bgfix"><span>Firefox 请用 -firefox.zip，否则后台起不来</span></div>'
+      : '<b>装的是 Firefox 版扩展，当前浏览器是 Chrome</b>' +
+        '<div class="bgfix"><span>请换成 -chrome.zip（或仓库里的「浏览器扩展」目录），否则多线程下载用不了</span></div>';
+    document.body.insertBefore(d, document.body.firstChild);
+  }
+
   async function initBoost() {
     var res = await bgSend('boost-state');
     paintBoost(res);
@@ -677,6 +705,9 @@
     $('repo').addEventListener('keydown', function (e) { if (e.key === 'Enter') scan(); });
     $('btnOptions').onclick = function () { bgSend('open-options'); };
     $('btnBoost').onclick = toggleBoost;
+    // 装错包的话先提醒（多线程下载依赖 Chrome 版的 offscreen 权限）
+    var mismatch = pkgMismatch();
+    if (mismatch) showPkgBanner(mismatch);
     // 先确认后台在不在：不在就直接挂提示，也不再去探测镜像白等
     checkBg().then(function (ok) { if (ok) initBoost(); });
     $('btnAll').onclick = function () {

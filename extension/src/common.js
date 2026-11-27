@@ -2,11 +2,21 @@
  * 被 bg.js（importScripts）、content.js（manifest 里并列加载）、popup / options 共同使用。
  * 只用经典脚本写法（不能用 import/export），顶层变量加统一前缀避免重复注入时冲突。
  */
-var EXT = (typeof browser !== 'undefined' && browser && browser.runtime) ? browser : chrome;
+/* 判断当前是不是 Firefox，以及该用哪套 API。
+ *
+ * 注意：新版 Chrome（158 实测）也提供了全局 browser 对象，所以「有 browser 就是 Firefox」
+ * 这种判断在 Chrome 上会误判成 Firefox，从而用了只认 Promise 的 browser.* 调用方式，
+ * 所有回调写法全部失效 —— 表现就是 popup 里点任何按钮都提示「后台没有启动」。
+ * 这里改用 UA + Firefox 专有的 runtime.getBrowserInfo 双重判断。 */
+var IS_FF = (typeof navigator !== 'undefined' && /firefox\//i.test(navigator.userAgent || '')) ||
+  (typeof browser !== 'undefined' && !!browser && !!browser.runtime &&
+    typeof browser.runtime.getBrowserInfo === 'function');
+
+var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime) ? browser : chrome;
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.3',
+  version: '1.4.4',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -535,8 +545,27 @@ function bgSendOnce(msg, timeoutMs) {
     }
 
     var p;
+    if (IS_FF) {
+      /* Firefox：只认 Promise。传回调会被当成非法参数直接抛错，
+       * 而且不能「发两次」——那会让下载任务被入队两遍。 */
+      try {
+        p = EXT.runtime.sendMessage(msg);
+      } catch (e) {
+        fin({ error: String((e && e.message) || e) });
+        return;
+      }
+      if (p && typeof p.then === 'function') {
+        p.then(function (res) { fin(res || {}); },
+          function (e) { fin({ error: String((e && e.message) || e) }); });
+      } else {
+        fin({ error: 'Receiving end does not exist' });
+      }
+      return;
+    }
+    /* Chrome / Edge：回调风格最稳（从 MV3 早期到现在都支持），
+     * 不传回调的 Promise 形态在新版本才有。 */
     try {
-      p = EXT.runtime.sendMessage(msg, function (res) {
+      EXT.runtime.sendMessage(msg, function (res) {
         if (EXT.runtime.lastError) {
           fin({ error: EXT.runtime.lastError.message });
           return;
@@ -545,12 +574,6 @@ function bgSendOnce(msg, timeoutMs) {
       });
     } catch (e) {
       fin({ error: String((e && e.message) || e) });
-      return;
-    }
-    // Firefox：上面的回调不会执行，返回的是 Promise
-    if (p && typeof p.then === 'function') {
-      p.then(function (res) { fin(res || {}); },
-        function (e) { fin({ error: String((e && e.message) || e) }); });
     }
   });
 }
@@ -581,12 +604,39 @@ function bgSend(type, payload) {
 }
 
 /* 各浏览器的扩展管理页地址，报错时直接告诉用户去哪儿点「重新加载」 */
-var EXT_MANAGER = (typeof browser !== 'undefined' && browser && browser.runtime) ? 'about:debugging' : 'chrome://extensions';
+var EXT_MANAGER = IS_FF ? 'about:debugging' : 'chrome://extensions';
 
 /* 判断一条错误是不是「后台没起来/连不上」，这类错误要给出重载扩展的指引，
  * 而不是像业务错误那样让用户去查仓库地址。 */
 function isBgDownError(msg) {
   return /后台没有启动|后台在线|重新加载|重新载入|Receiving end|Could not establish|message port closed|__timeout__/i.test(String(msg || ''));
+}
+
+/* 跨浏览器的浏览器 API 调用。
+ * Chrome 的 chrome.* 主要靠回调（downloads 系列至今没有 Promise 版）；
+ * Firefox 的 browser.* 反过来，多传一个回调会被判成非法参数直接抛错。
+ * 统一成 cb(err, result)：Firefox 走 Promise，其它走回调。 */
+function callExt(fn, thisObj, args, cb) {
+  var called = false;
+  function done(err, r) {
+    if (called) return;
+    called = true;
+    if (cb) cb(err, r);
+  }
+  if (IS_FF) {
+    var p;
+    try { p = fn.apply(thisObj, args); } catch (e) { done(e); return; }
+    if (p && typeof p.then === 'function') {
+      p.then(function (r) { done(null, r); }, function (e) { done(e); });
+    } else done(null, p);
+    return;
+  }
+  try {
+    fn.apply(thisObj, args.concat([function (r) {
+      var le = EXT.runtime && EXT.runtime.lastError;
+      done(le ? (le.message || 'failed') : null, r);
+    }]));
+  } catch (e) { done(e); }
 }
 
 /* 事件订阅兼容层：

@@ -755,6 +755,27 @@
     });
   } catch (e) {}
 
+  /* github.com 原生页面上点 Release 文件名，也交给加速通道（多线程 + 故障换线）。
+   * 以前只有镜像页会被接管，原生页面是浏览器单连接直下，大文件就会明显更慢。
+   * 镜像页里 mirror.js 也挂了同样的监听，靠 defaultPrevented 保证不会重复处理。 */
+  function takeNativeDownload(e) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (e.defaultPrevented) return;
+    var a = e.target && e.target.closest && e.target.closest('a[href*="/releases/download/"]');
+    if (!a || !a.href) return;
+    var gh = ghCanonical(a.href);
+    if (!parseAssetUrl(gh)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    state.open = true;
+    if (!state.host || !state.host.parentNode) { try { mount(); } catch (err) {} }
+    render();
+    startPoll();
+    autoDownload(a.href);
+  }
+  document.addEventListener('click', function (e) { takeNativeDownload(e); }, true);
+  document.addEventListener('auxclick', function (e) { takeNativeDownload(e); }, true);
+
   /* 镜像页上点了 Release 资源链接：mirror.js 拦下来后走这里。
    * 不再只是「打开面板」——直接把点到的那个文件交给加速通道下载，一步到位。 */
   window.addEventListener('ghdl-open-panel', function (ev) {

@@ -14,7 +14,7 @@ const HTML = `<!doctype html><html data-color-mode="light"><head><title>Release 
   <a class="other" href="/octocat/Hello-World/issues">Issues</a>
 </body></html>`;
 
-function boot(url, withContent) {
+function boot(url, withContent, withMirror = true) {
   const dom = new JSDOM(HTML, { url, pretendToBeVisual: true, runScripts: 'outside-only' });
   const w = dom.window;
   const calls = { enqueue: [] };
@@ -45,7 +45,7 @@ function boot(url, withContent) {
   };
   w.eval(SRC('common.js'));
   if (withContent) w.eval(SRC('content.js'));
-  w.eval(SRC('mirror.js'));
+  if (withMirror) w.eval(SRC('mirror.js'));
   return { dom, w, calls };
 }
 
@@ -156,6 +156,21 @@ console.log('\n[7] 面板不在时的兜底');
   await tick();
   ok('没人接住就不拦，退回原来的跳转', !ev.defaultPrevented);
   ok('也不会重复入队', calls.enqueue.length === 0);
+  w.close();
+}
+
+/* ---------- 8. github.com 原生页面：点文件同样走加速通道 ---------- */
+console.log('\n[8] 原生 github.com 页面 · 点 release 文件');
+{
+  const { w, calls } = boot('https://github.com/octocat/Hello-World/releases/tag/v1.0.0', true, false);
+  const a = w.document.querySelector('a.a1');
+  const ev = new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  a.dispatchEvent(ev);
+  await tick();
+  ok('原生页面点击也被接管', ev.defaultPrevented, 'defaultPrevented=' + ev.defaultPrevented);
+  const item = calls.enqueue[0] && calls.enqueue[0][0];
+  ok('入队的是 github 原地址', item && item.url.indexOf('https://github.com/') === 0, item && item.url);
+  ok('只入队一次', calls.enqueue.length === 1, String(calls.enqueue.length));
   w.close();
 }
 

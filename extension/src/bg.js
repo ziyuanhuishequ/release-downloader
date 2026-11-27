@@ -785,6 +785,35 @@ async function preflight(route, url) {
   }
 }
 
+/* 从镜像页点文件名、右键菜单进来的任务只有地址、没有大小。
+ * 分片判断依赖 size，取不到就会被当成「小文件」直接走单连接 —— 这正是
+ * 「开了国内访问后下载反而只有单线程」的原因。这里用 Range 先问一次总大小。 */
+async function probeFileSize(route, url) {
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 3500);
+  try {
+    var res = await fetch(routeUrl(route, url), {
+      headers: { Range: 'bytes=0-0' },
+      cache: 'no-store',
+      redirect: 'follow',
+      signal: ctrl.signal
+    });
+    var cr = res.headers.get('content-range') || '';
+    var m = cr.match(/\/(\d+)/);
+    var total = m ? Number(m[1]) : 0;
+    if (!total && res.status === 200) {
+      var len = Number(res.headers.get('content-length') || 0);
+      if (len > 0) total = len;
+    }
+    try { res.body && res.body.cancel(); } catch (e) {}
+    return total;
+  } catch (e) {
+    return 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ---------------- 下载队列 ---------------- */
 
 var ERR_TEXT = {
@@ -824,6 +853,7 @@ function pendingCount() {
 function updateBadge() {
   var n = pendingCount();
   try {
+    if (!EXT.action || !EXT.action.setBadgeText) return;   // 老浏览器没有 action 也不该拖垮后台
     EXT.action.setBadgeText({ text: n ? String(n) : '' });
     EXT.action.setBadgeBackgroundColor({ color: '#FF6A3D' });
   } catch (e) {}
@@ -886,12 +916,9 @@ function maybeBoost(task) {
     segSend({ type: 'seg-boost', id: task.id });
   } else if (task.downloadId) {
     try {
-      EXT.downloads.pause(task.downloadId, function () {
-        void EXT.runtime.lastError;
+      callExt(EXT.downloads.pause, EXT.downloads, [task.downloadId], function () {
         setTimeout(function () {
-          try {
-            EXT.downloads.resume(task.downloadId, function () { void EXT.runtime.lastError; });
-          } catch (e) {}
+          callExt(EXT.downloads.resume, EXT.downloads, [task.downloadId]);
         }, 400);
       });
     } catch (e) {}
@@ -939,7 +966,7 @@ async function switchRoute(task, prefix, auto) {
   var dlId = task.downloadId;
   if (dlId) {
     activeIds.delete(dlId);          // 先摘掉，cancel 触发的 interrupted 就不会走失败重试
-    try { EXT.downloads.cancel(dlId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+    callExt(EXT.downloads.cancel, EXT.downloads, [dlId]);
   }
   if (task.segmented) abortSeg(task);
   task.downloadId = 0;
@@ -969,7 +996,7 @@ function cancelTask(task) {
   var dlId = task.downloadId;
   if (dlId) {
     activeIds.delete(dlId);
-    try { EXT.downloads.cancel(dlId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+    callExt(EXT.downloads.cancel, EXT.downloads, [dlId]);
   }
   if (task.segmented) abortSeg(task);
   task.segmented = false;
@@ -1022,25 +1049,20 @@ async function pauseTask(task) {
     return { ok: true, deferred: true };
   }
   return new Promise(function (resolve) {
-    try {
-      EXT.downloads.pause(id, function () {
-        var le = EXT.runtime.lastError;
-        if (le) {
-          resolve({ ok: false, error: '这条线路不支持暂停，可以「换线路」或「取消」后重来' });
-          return;
-        }
-        task.status = 'paused';
-        task.speed = 0;
-        task.boosting = false;
-        task.slow = false;
-        task.slowSince = 0;
-        task._sp = null;
-        persist(); updateBadge(); pump();
-        resolve({ ok: true });
-      });
-    } catch (e) {
-      resolve({ ok: false, error: (e && e.message) || String(e) });
-    }
+    callExt(EXT.downloads.pause, EXT.downloads, [id], function (err) {
+      if (err) {
+        resolve({ ok: false, error: '这条线路不支持暂停，可以「换线路」或「取消」后重来' });
+        return;
+      }
+      task.status = 'paused';
+      task.speed = 0;
+      task.boosting = false;
+      task.slow = false;
+      task.slowSince = 0;
+      task._sp = null;
+      persist(); updateBadge(); pump();
+      resolve({ ok: true });
+    });
   });
 }
 
@@ -1061,31 +1083,26 @@ async function resumeTask(task) {
 
   if (task.downloadId) {
     return new Promise(function (resolve) {
-      try {
-        EXT.downloads.resume(task.downloadId, function () {
-          var le = EXT.runtime.lastError;
-          if (le) {
-            // 连接已经被浏览器回收，只能重新排一次
-            task.status = 'queued';
-            task.downloadId = 0;
-            task.received = 0;
-            task.speed = 0;
-            task.error = '';
-            persist(); pump();
-            resolve({ ok: true, requeued: true });
-            return;
-          }
-          task.status = 'downloading';
+      callExt(EXT.downloads.resume, EXT.downloads, [task.downloadId], function (err) {
+        if (err) {
+          // 连接已经被浏览器回收，只能重新排一次
+          task.status = 'queued';
+          task.downloadId = 0;
+          task.received = 0;
           task.speed = 0;
-          task.slow = false;
-          task.slowSince = 0;
-          task._sp = null;
-          persist(); updateBadge();
-          resolve({ ok: true });
-        });
-      } catch (e) {
-        resolve({ ok: false, error: (e && e.message) || String(e) });
-      }
+          task.error = '';
+          persist(); pump();
+          resolve({ ok: true, requeued: true });
+          return;
+        }
+        task.status = 'downloading';
+        task.speed = 0;
+        task.slow = false;
+        task.slowSince = 0;
+        task._sp = null;
+        persist(); updateBadge();
+        resolve({ ok: true });
+      });
     });
   }
 
@@ -1103,7 +1120,13 @@ async function resumeTask(task) {
 
 var offCreating = null;
 
+/* Firefox 没有 offscreen 文档，但它本来就有常驻的后台页面：
+ * 构建 Firefox 包时把 off.js 一起放进 background.scripts，分片逻辑直接跑在后台里，
+ * 两边共用同一套 seg-* 消息。 */
+var SEG_INLINE = IS_FF;
+
 async function hasOffscreen() {
+  if (SEG_INLINE) return true;
   try {
     if (EXT.offscreen && EXT.offscreen.hasDocument) return await EXT.offscreen.hasDocument();
     var ctxs = await EXT.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
@@ -1114,6 +1137,7 @@ async function hasOffscreen() {
 }
 
 async function ensureOffscreen() {
+  if (SEG_INLINE) return true;        // Firefox：off.js 已经在后台页里跑着
   if (!EXT.offscreen) return false;
   if (await hasOffscreen()) return true;
   if (!offCreating) {
@@ -1162,10 +1186,8 @@ async function startSegmented(task, route, settings, order) {
 }
 
 function segSend(payload) {
-  try {
-    EXT.runtime.sendMessage(Object.assign({ target: 'offscreen' }, payload),
-      function () { void EXT.runtime.lastError; });
-  } catch (e) {}
+  callExt(EXT.runtime.sendMessage, EXT.runtime,
+    [Object.assign({ target: 'offscreen' }, payload)]);
 }
 
 function abortSeg(task) {
@@ -1199,7 +1221,7 @@ async function onSegDone(m) {
   if (m.total) { task.total = m.total; task.size = task.size || m.total; }
   try {
     markOurDownload(m.url);      // blob: 地址，登记一下更保险
-    var id = await EXT.downloads.download({
+    var id = await extDownload({
       url: m.url,
       filename: task.path,
       conflictAction: task.tries > 0 ? 'overwrite' : 'uniquify',
@@ -1276,20 +1298,16 @@ async function mirrorAssetToGithub(u) {
 
 /* 通知当前标签的内容脚本：打开面板，并把这个文件直接加进下载队列 */
 function notifyAutoDownload(gh) {
-  try {
-    EXT.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-      var t = tabs && tabs[0];
-      if (!t || !t.id) return;
-      try {
-        /* Firefox 的 browser.tabs.sendMessage 只返回 Promise，第三个回调参数会被忽略，
-         * 这里统一按返回值处理，两种浏览器都不会漏掉异常。 */
-        try {
-          var ps = EXT.tabs.sendMessage(t.id, { type: 'open-panel', auto: gh });
-          if (ps && ps.catch) ps.catch(function () {});
-        } catch (e) {}
-      } catch (e) {}
-    });
-  } catch (e) {}
+  callExt(EXT.tabs.query, EXT.tabs, [{ active: true, currentWindow: true }], function (err, tabs) {
+    var t = !err && tabs && tabs[0];
+    if (!t || !t.id) return;
+    try {
+      /* Firefox 的 browser.tabs.sendMessage 只返回 Promise，第三个回调参数会被忽略，
+       * 这里统一按返回值处理，两种浏览器都不会漏掉异常。 */
+      var ps = EXT.tabs.sendMessage(t.id, { type: 'open-panel', auto: gh });
+      if (ps && ps.catch) ps.catch(function () {});
+    } catch (e) {}
+  });
 }
 
 /* 浏览器自己从镜像开始了下载（新标签打开、脚本没拦住、镜像页面的直链等）：
@@ -1304,14 +1322,27 @@ try {
       if (isOurRouteUrl(item.url)) return;
       mirrorAssetToGithub(item.url).then(function (gh) {
         if (!gh) return;
-        try { EXT.downloads.cancel(item.id, function () { void EXT.runtime.lastError; }); } catch (e) {}
-        try { EXT.downloads.erase({ id: item.id }, function () { void EXT.runtime.lastError; }); } catch (e) {}
+        callExt(EXT.downloads.cancel, EXT.downloads, [item.id]);
+        callExt(EXT.downloads.erase, EXT.downloads, [{ id: item.id }]);
         enqueue([{ url: gh }]);
         notifyAutoDownload(gh);
       }).catch(function () {});
     });
   }
 } catch (e) {}
+
+/* Chrome 的 downloads.download() 只给回调、不返回 Promise，
+ * 直接 await 拿到的是 undefined，下载编号就丢了（进度、暂停、换线全跟着失效）。
+ * 统一走 callExt，两种浏览器都能拿到 id。 */
+function extDownload(opts) {
+  return new Promise(function (resolve, reject) {
+    callExt(EXT.downloads.download, EXT.downloads, [opts], function (err, id) {
+      if (err) { reject(err instanceof Error ? err : new Error(String(err))); return; }
+      if (id == null) { reject(new Error('浏览器没有返回下载编号')); return; }
+      resolve(id);
+    });
+  });
+}
 
 async function enqueue(items) {
   var settings = await getSettings();
@@ -1382,6 +1413,12 @@ async function startTask(task, settings) {
     // 选线期间用户可能点了暂停/取消：别把它又拽回「下载中」
     if (task.status !== 'probing') { updateBadge(); pump(); return; }
     var route = order[task.routeIdx % order.length];
+    // 没有大小就先探一次（镜像页点链接 / 右键菜单 / 老队列），不然多线程永远用不上
+    if (!task.size && !task.total) {
+      var probed = await probeFileSize(route, task.url);
+      if (probed) task.size = probed;
+      if (task.status !== 'probing') { updateBadge(); pump(); return; }
+    }
     var size0 = task.size || task.total || 0;
     var segCap0 = (settings.segMaxMB || 128) * 1024 * 1024;
     var willSeg = settings.segEnabled !== false && !task.segFailed &&
@@ -1433,7 +1470,7 @@ async function startTask(task, settings) {
     }
     var dlUrl = routeUrl(route, task.url);
     markOurDownload(dlUrl);      // 这条是我们自己发起的：onCreated 兜底千万别拦
-    var id = await EXT.downloads.download({
+    var id = await extDownload({
       url: dlUrl,
       filename: task.path,
       conflictAction: task.tries > 0 ? 'overwrite' : 'uniquify',
@@ -1475,23 +1512,21 @@ function finishOne() {
  * 这里每隔一会儿用 downloads.search 主动同步一次，一次调用覆盖所有在下的任务。 */
 function syncProgress() {
   if (!activeIds.size) return;
-  try {
-    EXT.downloads.search({ state: 'in_progress' }, function (list) {
-      void EXT.runtime.lastError;
-      (list || []).forEach(function (d) {
-        var task = activeIds.get(d.id);
-        if (!task || task.status !== 'downloading') return;
-        if (d.totalBytes > 0) {
-          task.total = d.totalBytes;
-          if (!task.size) task.size = d.totalBytes;
-        }
-        if (typeof d.bytesReceived === 'number' && d.bytesReceived !== task.received) {
-          task.received = d.bytesReceived;
-          sampleSpeed(task, task.received);
-        }
-      });
+  callExt(EXT.downloads.search, EXT.downloads, [{ state: 'in_progress' }], function (err, list) {
+    if (err) return;
+    (list || []).forEach(function (d) {
+      var task = activeIds.get(d.id);
+      if (!task || task.status !== 'downloading') return;
+      if (d.totalBytes > 0) {
+        task.total = d.totalBytes;
+        if (!task.size) task.size = d.totalBytes;
+      }
+      if (typeof d.bytesReceived === 'number' && d.bytesReceived !== task.received) {
+        task.received = d.bytesReceived;
+        sampleSpeed(task, task.received);
+      }
     });
-  } catch (e) {}
+  });
 }
 setInterval(syncProgress, 1200);
 
@@ -1549,7 +1584,7 @@ function handleChange(delta) {
         return;
       }
       // 清掉失败的下载记录，否则重试会留下 (1)(2) 副本
-      try { EXT.downloads.erase({ id: delta.id }, function () { void EXT.runtime.lastError; }); } catch (e) {}
+      callExt(EXT.downloads.erase, EXT.downloads, [{ id: delta.id }]);
       task.tries++;
       // 把刚才这条线路冷却 3 分钟，下次从下一条开始
       if (task.routePrefix !== undefined) {
@@ -1746,7 +1781,7 @@ onMessage(function (msg, sender, respond) {
             if (t.status === 'downloading' || t.status === 'paused') {
               if (t.segmented) abortSeg(t);
               if (t.downloadId) {
-                try { EXT.downloads.cancel(t.downloadId, function () { void EXT.runtime.lastError; }); } catch (e) {}
+                callExt(EXT.downloads.cancel, EXT.downloads, [t.downloadId]);
                 t.downloadId = 0;
               }
               t.status = 'canceled';
@@ -1787,7 +1822,7 @@ onMessage(function (msg, sender, respond) {
 
 function buildMenus() {
   try {
-    EXT.contextMenus.removeAll(function () {
+    callExt(EXT.contextMenus.removeAll, EXT.contextMenus, [], function () {
       EXT.contextMenus.create({
         id: 'ghdl-link',
         title: '用下载助手下载此文件',

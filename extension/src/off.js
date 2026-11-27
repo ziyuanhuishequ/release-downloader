@@ -13,9 +13,10 @@
 
   function post(payload) {
     try {
-      chrome.runtime.sendMessage(Object.assign({ target: 'bg' }, payload), function () {
-        void chrome.runtime.lastError;
-      });
+      /* 不传回调：Chrome 与 Firefox 都会返回 Promise；传回调在 Firefox 里会被当成
+       * 非法参数直接抛错（这也是后台版分片在 Firefox 上跑不起来的原因之一）。 */
+      var p = chrome.runtime.sendMessage(Object.assign({ target: 'bg' }, payload));
+      if (p && typeof p.catch === 'function') p.catch(function () {});
     } catch (e) { /* 后台可能刚重启，忽略 */ }
   }
 

@@ -55,10 +55,12 @@ def firefox_manifest():
     m = json.load(open(os.path.join(HERE, "manifest.json"), encoding="utf-8"))
     m.pop("minimum_chrome_version", None)
     m.pop("optional_host_permissions", None)
-    # Firefox 没有 offscreen API，分片下载会自动退回单连接
+    # Firefox 没有 offscreen 权限，声明了会报警告
     if "permissions" in m:
         m["permissions"] = [p for p in m["permissions"] if p != "offscreen"]
-    m["background"] = {"scripts": ["src/common.js", "src/bg.js"]}
+    # 但它本来就有后台页面（带 DOM 和 Blob）：把 off.js 直接放进 background.scripts，
+    # 分片下载照常可用，不会再退化成单连接
+    m["background"] = {"scripts": ["src/common.js", "src/off.js", "src/bg.js"]}
     m["browser_specific_settings"] = {
         "gecko": {
             "id": "gh-release-helper@ziyuanhuishequ",
