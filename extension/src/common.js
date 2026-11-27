@@ -6,7 +6,7 @@ var EXT = (typeof browser !== 'undefined' && browser && browser.runtime) ? brows
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.1',
+  version: '1.4.2',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 

@@ -574,8 +574,6 @@
     if (!sw) return;
     sw.classList.toggle('on', boostOn);
     sw.setAttribute('aria-checked', boostOn ? 'true' : 'false');
-    var go = $('btnBoostGo');
-    if (go) go.classList.toggle('hide', !boostOn);
     var tip = $('boostTip');
     if (!tip) return;
     tip.className = 'bt2';
@@ -635,14 +633,6 @@
     }
   }
 
-  async function openMirror() {
-    var res = await bgSend('boost-current');
-    if (res && res.ok) return;
-    if (boostSite && boostSite.base) {
-      try { EXT.tabs.create({ url: mirrorUrlOf(boostSite.base, 'https://github.com/') }); } catch (e) {}
-    }
-  }
-
   /* ---------- 装配 ---------- */
 
   async function init() {
@@ -655,7 +645,6 @@
     $('repo').addEventListener('keydown', function (e) { if (e.key === 'Enter') scan(); });
     $('btnOptions').onclick = function () { bgSend('open-options'); };
     $('btnBoost').onclick = toggleBoost;
-    $('btnBoostGo').onclick = openMirror;
     initBoost();
     $('btnAll').onclick = function () {
       var list = visibleAssets();

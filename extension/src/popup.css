@@ -69,11 +69,6 @@ body {
 }
 .bt2.ok { color: #087458; font-weight: 600; }
 .bt2.bad { color: var(--red); font-weight: 600; }
-.bgo {
-  border: 2px solid var(--ink); background: var(--coral); color: #fff;
-  font-size: 11px; font-weight: 800; padding: 2px 8px; cursor: pointer; flex: none;
-}
-.bgo:hover { background: #FF7E55; }
 
 /* 仓库输入 */
 .scan { display: flex; gap: 8px; padding: 10px 12px 6px; }

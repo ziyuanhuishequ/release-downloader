@@ -1814,9 +1814,11 @@ try {
     if (got && Array.isArray(got.tasks) && got.tasks.length) {
       tasks = got.tasks;
       tasks.forEach(function (t) {
+        // 老版本可能把镜像地址存进了队列（会拼成镜像套镜像），恢复时统一纠正
+        if (t && t.url) t.url = ghCanonical(t.url);
         // 暂停的任务也一起重排：downloadId 已经跟 Service Worker 一起丢了，
         // 留着 paused 状态用户点「继续」也只能从头来，不如直接接着下。
-        if (t.status === 'downloading' || t.status === 'probing' || t.status === 'paused') {
+        if (t && (t.status === 'downloading' || t.status === 'probing' || t.status === 'paused')) {
           t.status = 'queued';
           t.downloadId = 0;
         }
