@@ -25,15 +25,15 @@
 
 | 用途 | 文件 |
 | --- | --- |
-| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.8.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Desktop-v1.6.8.exe) |
-| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.8-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-macOS-v1.6.8-universal.zip) |
-| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip) |
-| Firefox | [`GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/latest/download/GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip) |
+| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.8.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.8/GitHub-Release-Downloader-Desktop-v1.6.8.exe) |
+| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.8-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.8/GitHub-Release-Downloader-macOS-v1.6.8-universal.zip) |
+| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip) |
+| Firefox | [`GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip) |
 
-上面几个文件都在 [**最新 Release**](https://github.com/ziyuanhuishequ/release-downloader/releases/latest) 的 Assets 里，
-点文件名即可直接下载；同一个 Release 里还有 `GitHub-Release-Downloader-Source-v1.6.8.zip`（Rust 源码）。
-扩展的每个历史版本另有单独 Release（如
-[ext-v1.4.6](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.6)）。
+桌面版在 [v1.6.8](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/v1.6.8)（同一个 Release 里还有
+`GitHub-Release-Downloader-Source-v1.6.8.zip` Rust 源码）；浏览器扩展在
+[ext-v1.4.7](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.7)，
+每个历史版本都单独发一个 Release，方便回退。
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
 （Edge 是 `edge://extensions`）→ 右上角开启「开发者模式」→「加载已解压的扩展程序」→ 选解压出来的文件夹。
@@ -132,7 +132,7 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
 
 扩展 v1.3.0 起支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
