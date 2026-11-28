@@ -1,7 +1,7 @@
 # GitHub Release 下载助手 · 浏览器扩展
 
 桌面版 exe 的浏览器版：不装任何软件，在 GitHub 的 Release 页面或扩展弹窗里勾选文件，
-自动测速选最快镜像、按 `仓库/版本/` 归档下载。
+自动测速选最快镜像、按 `仓库/系统/` 归档下载。
 
 > **国内免魔法直连 GitHub。** 打开「GitHub 国内访问」开关，不用梯子、不用代理软件、不改 hosts，
 > `github.com` 的仓库页 / Releases / Issues / 代码树都能正常打开。
@@ -21,7 +21,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -31,7 +31,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -59,7 +59,7 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
 - 某一片 20 秒没动静会自动断开换线路，不会卡死在一条死连接上
 - 下载前先探一字节校验（防镜像返回网页），不对自动换线
 - 断线、5xx 自动降级到备用线路重试，坏线路冷却 3 分钟
-- 按 `下载/GitHub/仓库名/版本号/文件名` 归档，可选关掉
+- 按 `下载/仓库名/系统/文件名` 归档（Windows / macOS / Linux / Android 各一个文件夹），可选关掉
 - 文件列表用「未下载 / 下载中 / 已暂停 / 已下载」角标区分，可一键「只看未下载」，
   下完的会记住（清浏览器数据或点设置页「清除下载记录」才会忘）
 - 线路面板可展开，看 20 条线路的实测速度与成功率，点一条固定使用
@@ -114,7 +114,7 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
 | --- | --- |
 | GitHub Token | 匿名接口 60 次/小时，填 Token 提到 5000 次/小时，也能读私有仓库 |
 | 并发数 | 同时下载几个文件，默认 3 |
-| 归档目录 | 默认 `GitHub/{owner}/{repo}/{tag}/`，可改成 `GitHub/{repo}/{tag}/` 或平铺 |
+| 归档目录 | 默认 `{repo}/{系统}/`（如 `KuroCat/Windows/`），关掉就平铺在下载目录 |
 | 自动测速 | 关掉后按内置顺序依次尝试 |
 | 线路 | 一行一条自定义镜像，格式 `名称\|https://前缀/`；上方可看线路池全部线路与健康度，点「更新线路池」立即拉取 |
 | 分片下载 | 开关、线程数（2~6）、单片上限、慢速阈值，默认 4 线程、128MB 封顶 |

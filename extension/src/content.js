@@ -153,6 +153,24 @@
     return { owner: m[1], repo: m[2], tag: m[3] === 'tag' ? decodeURIComponent(m[4] || '') : '' };
   }
 
+  /* 资源行里还塞着 sha256 摘要（"sha256:aea87e3e7ee0…"），
+   * 以前随便抓第一个 .color-fg-muted 就当成体积，结果 77.8MB 显示成 9B。
+   * 这里只认「整段文本就是体积」的元素，宁可留空也不瞎猜。 */
+  var SIZE_ONLY_RE = /^[\d.]+\s*(?:TB|GB|MB|KB|B)$/i;
+  function sizeTextOf(box) {
+    if (!box) return '';
+    var els = box.querySelectorAll('span,div,td');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.children && el.children.length) continue;
+      var t = (el.textContent || '').trim();
+      if (t && t.length <= 16 && SIZE_ONLY_RE.test(t)) return t;
+    }
+    // 老版页面把体积和摘要写在同一个节点里：取最后一个「数字+单位」
+    var m = (box.textContent || '').match(/([\d.]+\s*(?:TB|GB|MB|KB|B))(?![\w])/gi);
+    return m && m.length ? m[m.length - 1].trim() : '';
+  }
+
   /* 兜底：直接从页面里扒下载链接（API 不通、私有仓库、限流时用） */
   function assetsFromDom() {
     var seen = {};
@@ -165,13 +183,8 @@
       var p = parseAssetUrl(abs);
       if (!p || seen[p.asset]) return;
       seen[p.asset] = true;
-      var sizeText = '';
       var box = a.closest('div.Box-row') || a.closest('li') || a.parentElement;
-      if (box) {
-        var sp = box.querySelector('span.color-fg-muted, span.text-sm.color-fg-muted');
-        if (sp && /\d/.test(sp.textContent)) sizeText = sp.textContent;
-      }
-      out.push({ name: p.asset, size: parseSizeText(sizeText), url: abs, type: '', downloads: 0 });
+      out.push({ name: p.asset, size: parseSizeText(sizeTextOf(box)), url: abs, type: '', downloads: 0 });
     });
     return out;
   }
@@ -480,7 +493,7 @@
     }
 
     var filters = [
-      ['all', '全部'], ['win', 'Windows'], ['mac', 'macOS'], ['linux', 'Linux']
+      ['all', '全部'], ['win', 'Windows'], ['mac', 'macOS'], ['linux', 'Linux'], ['android', '安卓']
     ].map(function (f) {
       return '<div class="tg ' + (state.filter === f[0] ? 'on' : '') + '" data-filter="' + f[0] + '">' + f[1] + '</div>';
     }).join('');
@@ -507,7 +520,7 @@
             '<button class="go" id="go"' + (picked.length ? '' : ' disabled') + '>下载 ' + picked.length + ' 个文件' +
               (pickedSize ? '（' + fmtSize(pickedSize) + '）' : '') + '</button>' +
             (onMirror ? '<div class="mir">经镜像 ' + esc(location.host) + ' 访问 · 下载走加速线路、不经过镜像 · <span class="lk" id="backGh">切回 GitHub 原站</span></div>' : '') +
-            '<div class="tip">保存到「下载/GitHub/仓库/版本」，可在扩展设置里关掉归档</div>' +
+            '<div class="tip">保存到「下载/仓库名/系统」，可在扩展设置里改成平铺</div>' +
           '</div>' +
         '</div>'
       ) : (

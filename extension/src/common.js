@@ -16,7 +16,7 @@ var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.6',
+  version: '1.4.7',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -415,12 +415,14 @@ function fmtEta(seconds) {
   return (seconds / 3600).toFixed(1) + ' 小时';
 }
 
-/* "2.37 MB" -> 字节数 */
+/* "77.8 MB" → 字节数。单位必须自成词尾，否则 sha256 摘要里的 "…637b…" 会被
+ * 当成 637 字节（GitHub 新版资源行把摘要放在体积前面，踩过这个坑）。 */
 function parseSizeText(text) {
   if (!text) return 0;
-  var m = String(text).match(/([\d.]+)\s*(B|KB|MB|GB|TB)/i);
+  var m = String(text).match(/([\d.]+)\s*(TB|GB|MB|KB|B)(?![\w])/i);
   if (!m) return 0;
   var n = parseFloat(m[1]);
+  if (!isFinite(n) || n <= 0) return 0;
   var unit = m[2].toUpperCase();
   var mul = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024, TB: 1024 * 1024 * 1024 * 1024 }[unit] || 1;
   return Math.round(n * mul);
@@ -433,21 +435,35 @@ function sanitizeSeg(s) {
     .trim() || '_';
 }
 
-/* 下载路径：GitHub/仓库/版本/文件名（可在设置里关掉归档） */
+/* 系统文件夹名：下载后按系统分好，装哪个平台直接进哪个文件夹 */
+var PLATFORM_DIR = {
+  win: 'Windows',
+  mac: 'macOS',
+  linux: 'Linux',
+  android: 'Android'
+};
+
+/* 下载路径：仓库名/系统/文件名（关掉归档就平铺在下载目录）。
+ * 以前是「GitHub/owner/repo/tag/文件名」，层层套娃还得自己往下翻；
+ * 现在直接以项目名建文件夹，里面按 Windows / macOS / Linux / Android 分开。 */
 function buildPath(info, settings) {
   var asset = sanitizeSeg(info.asset);
   if (!settings || !settings.subfolder) return asset;
-  var parts = ['GitHub', sanitizeSeg(info.owner), sanitizeSeg(info.repo), sanitizeSeg(info.tag || 'latest'), asset];
-  var path = parts.join('/');
-  if (path.length > 200) path = parts.slice(0, 3).join('/') + '/' + parts[3].slice(-120);
+  var repo = sanitizeSeg(info.repo || info.owner || 'GitHub');
+  var dir = PLATFORM_DIR[platformOf(info.asset)];
+  var head = dir ? repo + '/' + dir : repo;
+  var path = head + '/' + asset;
+  if (path.length > 200) path = head + '/' + asset.slice(-120);
   return path;
 }
 
 /* 从文件名猜平台，用于筛选和默认勾选 */
 function platformOf(name) {
   var n = String(name || '').toLowerCase();
+  if (/\.(apk|xapk|apks|aab)$/.test(n) || /\bandroid\b/.test(n)) return 'android';
   if (/\.(exe|msi|msix|appx)$/.test(n)) return 'win';
-  if (/windows|win64|win32|win_x64|_win|\bwin\b/.test(n)) return 'win';
+  // win 后面常跟版本号或位数：win7 / win64 / win-x64 / Windows；\bwin\b 匹配不到 win7
+  if (/\bwin(?:dows)?(?:7|8|10|11|32|64|x86|x64|arm64)?(?![\w])/.test(n)) return 'win';
   if (/\.(dmg|pkg)$/.test(n) || /darwin|macos|osx|apple|_mac|universal/.test(n)) return 'mac';
   if (/\.(deb|rpm|appimage|snap|flatpak)$/.test(n) || /linux|ubuntu|debian|fedora|musl|gnu/.test(n)) return 'linux';
   if (/\.(tar\.gz|tgz|zip|7z|tar\.xz|tar\.bz2)$/.test(n) && /source|src|code|\.tar\./.test(n) && !/win|linux|mac|darwin/.test(n)) return 'src';
