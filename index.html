@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release 下载助手 · GitHub 批量下载，国内免魔法直连</title>
+<meta name="description" content="批量扫描 GitHub Release、多线程分片下载、按系统自动归档。桌面版 4.7 MB 免安装单文件，另有浏览器扩展：国内不用梯子就能打开 GitHub，下载走 20 条加速线路池。">
+<meta name="theme-color" content="#FFF3DC">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Release 下载助手 · GitHub 批量下载，国内免魔法直连">
+<meta property="og:description" content="批量扫描、多线程分片、自动归档。桌面版免安装，扩展国内免魔法直连 GitHub。">
+<meta property="og:image" content="https://ziyuanhuishequ.github.io/release-downloader/assets/promo-banner.png">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="bg" aria-hidden="true">
+  <span class="blob b1"></span>
+  <span class="blob b2"></span>
+  <span class="blob b3"></span>
+  <span class="grid"></span>
+  <span class="grain"></span>
+</div>
+
+<a class="skip" href="#main">跳到主要内容</a>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top">
+      <img src="assets/icon.png" alt="" width="36" height="36">
+      <span class="brand-txt">Release 下载助手</span>
+    </a>
+    <nav class="links" aria-label="主导航">
+      <a href="#features">亮点</a>
+      <a href="#ext">浏览器扩展</a>
+      <a href="#ui">界面</a>
+      <a href="#start">怎么用</a>
+      <a href="#faq">常见问题</a>
+    </nav>
+    <div class="nav-act">
+      <a class="btn btn-sm btn-ghost" href="https://github.com/ziyuanhuishequ/release-downloader" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn btn-sm btn-primary" href="#download">下载</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero wrap" id="top">
+    <div class="hero-l">
+      <p class="chip-row reveal">
+        <span class="chip chip-mint"><i class="dot"></i>v1.6.8 已发布</span>
+        <span class="chip">Windows / macOS</span>
+        <span class="chip">浏览器扩展</span>
+      </p>
+
+      <h1 class="reveal">GitHub 的 Release<br><span class="mark">一键收干净</span></h1>
+
+      <p class="lede reveal">
+        批量扫描仓库、多线程分片下载、按系统自动归档到不同文件夹。
+        桌面版是一个 <b>4.7 MB 的免安装单文件</b>；浏览器扩展在国内
+        <b class="u-mint">不用梯子</b> 也能直接打开 GitHub，下载还很快。
+      </p>
+
+      <div class="cta-row reveal">
+        <a class="btn btn-primary btn-lg" href="assets/downloads/GitHub-Release-Downloader-Desktop-v1.6.8.exe" download>
+          <span class="bi">↓</span> 下载 Windows 版
+        </a>
+        <a class="btn btn-ghost btn-lg" href="assets/downloads/GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip" download>
+          <span class="bi">⊞</span> 浏览器扩展
+        </a>
+        <a class="btn btn-text" href="#ui">看界面 →</a>
+      </div>
+
+      <p class="fine reveal">
+        免安装 · 不写注册表 · 开源 MIT · 文件直接从本站下载，打不开 GitHub 也能装
+      </p>
+    </div>
+
+    <div class="hero-r reveal">
+      <figure class="win win-tall">
+        <div class="win-bar">
+          <i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i>
+          <span class="win-t">Release 下载助手 · 浏览器扩展</span>
+        </div>
+        <img src="assets/ext-hero.png" alt="浏览器扩展弹窗：开启 GitHub 国内访问后扫描仓库、批量下载文件" width="388" height="590">
+      </figure>
+
+      <div class="float f1" aria-hidden="true">
+        <i class="dot dot-mint"></i> 国内访问已开启
+        <span class="mono">252ms</span>
+      </div>
+      <div class="float f2" aria-hidden="true">
+        多线程 · <b class="mono">6</b> 段并发
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATS ============ -->
+  <section class="stats wrap reveal" aria-label="关键数据">
+    <div class="stat">
+      <span class="stat-n mono">20</span><span class="stat-u">条</span>
+      <span class="stat-l">加速线路池，测速择优</span>
+    </div>
+    <div class="stat">
+      <span class="stat-n mono">8</span><span class="stat-u">段</span>
+      <span class="stat-l">最大分片并发（4/6/8 自适应）</span>
+    </div>
+    <div class="stat">
+      <span class="stat-n mono">4.7</span><span class="stat-u">MB</span>
+      <span class="stat-l">单文件，双击即用</span>
+    </div>
+    <div class="stat">
+      <span class="stat-n mono">0</span><span class="stat-u">依赖</span>
+      <span class="stat-l">不装运行时，不写注册表</span>
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section class="section wrap" id="features">
+    <header class="sec-head reveal">
+      <p class="eyebrow"><i></i>核心能力</p>
+      <h2>为什么它比「手动一个个下」快得多</h2>
+      <p class="sec-sub">下载慢通常不是带宽不够，而是只开了一条连接、还卡在一条死线路上。这里三件事同时解决了它。</p>
+    </header>
+
+    <div class="cards">
+      <article class="card reveal">
+        <div class="ico" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <g shape-rendering="crispEdges">
+              <rect x="3" y="20" width="6" height="9" fill="#FF6A3D"/>
+              <rect x="11" y="14" width="6" height="15" fill="#FFC93C"/>
+              <rect x="19" y="8" width="6" height="21" fill="#2ED3A5"/>
+              <rect x="27" y="4" width="3" height="25" fill="#1A1E30"/>
+            </g>
+          </svg>
+        </div>
+        <h3>多线程分片，卡顿自愈</h3>
+        <p>大文件自动切成 <b>4 / 6 / 8 段</b>并发拉取。某一段 10 秒没有新字节就断开重连，
+        比同伴慢一大截的分片主动踢掉换线路，剩下的继续跑，不用整包重来。</p>
+        <ul class="tags"><li>分片并发</li><li>慢片踢除</li><li>失败回退单连接</li></ul>
+      </article>
+
+      <article class="card reveal">
+        <div class="ico" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <g shape-rendering="crispEdges">
+              <rect x="2" y="4" width="6" height="6" fill="#1A1E30"/>
+              <rect x="13" y="4" width="6" height="6" fill="#FF6A3D"/>
+              <rect x="24" y="4" width="6" height="6" fill="#1A1E30"/>
+              <rect x="2" y="13" width="6" height="6" fill="#1A1E30"/>
+              <rect x="13" y="13" width="6" height="6" fill="#1A1E30"/>
+              <rect x="24" y="13" width="6" height="6" fill="#FF6A3D"/>
+              <rect x="2" y="22" width="6" height="6" fill="#1A1E30"/>
+              <rect x="13" y="22" width="6" height="6" fill="#2ED3A5"/>
+              <rect x="24" y="22" width="6" height="6" fill="#1A1E30"/>
+            </g>
+          </svg>
+        </div>
+        <h3>20 条线路池，测速择优</h3>
+        <p>下载前并发测速，按实测速度排优先级；当前线路慢了 5.5 秒还没起色，就自动换下一条，
+        最多换 6 条，换过的线路会冷却一会儿，不再反复排第一。</p>
+        <ul class="tags"><li>实时测速</li><li>5.5 秒换线</li><li>失败冷却</li></ul>
+      </article>
+
+      <article class="card reveal">
+        <div class="ico" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <g shape-rendering="crispEdges">
+              <rect x="3" y="9" width="12" height="4" fill="#FFC93C"/>
+              <rect x="3" y="13" width="26" height="15" fill="#FFC93C"/>
+              <rect x="6" y="18" width="20" height="3" fill="#1A1E30"/>
+              <rect x="6" y="23" width="12" height="3" fill="#1A1E30"/>
+            </g>
+          </svg>
+        </div>
+        <h3>自动归档，断点续传</h3>
+        <p>按 <code>仓库 / 系统</code> 建子文件夹，Windows、macOS、Linux 各归各位，
+        文件不再糊成一堆。中断后已下的分片留着，下次一键接着下。</p>
+        <ul class="tags"><li>按系统分目录</li><li>断点续传</li><li>完成后询问打开</li></ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ EXTENSION ============ -->
+  <section class="ext-band" id="ext">
+    <div class="wrap ext-in">
+      <div class="ext-copy">
+        <p class="eyebrow light reveal"><i></i>浏览器扩展 · Chrome / Edge / Firefox</p>
+        <h2 class="reveal">不装 exe，<br>在浏览器里 <span class="mark mark-mint">免魔法</span> 下</h2>
+        <p class="lede light reveal">
+          打开「GitHub 国内访问」开关，仓库页、Releases、Issues、代码树直接就能打开，
+          <b>不用梯子、不用改 hosts、不用装代理软件</b>。
+        </p>
+
+        <ul class="checks reveal">
+          <li><i></i><span><b>页面走镜像，下载不走。</b>浏览交给镜像，下载请求一律走线路池 + 多线程分片，
+          不会被慢镜像的单连接拖着跑。</span></li>
+          <li><i></i><span><b>点文件名就被接管。</b>在 Release 页直接勾选批量下载，按
+          <code>仓库/版本/</code> 归档，中键点开也一样接管。</span></li>
+          <li><i></i><span><b>每个任务都能暂停、换线、续传。</b>分片任务保留已下数据，接着下不重来。</span></li>
+        </ul>
+
+        <div class="cta-row reveal">
+          <a class="btn btn-mint btn-lg" href="assets/downloads/GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip" download>
+            <span class="bi">⊞</span> Chrome / Edge 版
+          </a>
+          <a class="btn btn-outline-light btn-lg" href="assets/downloads/GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip" download>
+            <span class="bi">⊞</span> Firefox 版
+          </a>
+        </div>
+        <p class="fine light reveal">解压后在扩展管理页开启「开发者模式」→「加载已解压的扩展程序」</p>
+      </div>
+
+      <figure class="win win-dark reveal">
+        <div class="win-bar">
+          <i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i>
+          <span class="win-t">Release 页注入面板 · 当前版本实测</span>
+        </div>
+        <img src="assets/ext-page.png" alt="扩展在 GitHub Release 页面注入的下载面板，列出全部资源并可批量勾选下载" width="730" height="578">
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ UI ============ -->
+  <section class="section wrap" id="ui">
+    <header class="sec-head reveal">
+      <p class="eyebrow"><i></i>界面预览</p>
+      <h2>像素风，但不是玩具</h2>
+      <p class="sec-sub">没有渐变大按钮和花哨动效。信息密、状态清楚：哪条线路在跑、哪个分片卡了、还剩多久，一眼看到。</p>
+    </header>
+
+    <div class="gallery">
+      <figure class="shot reveal">
+        <div class="win">
+          <div class="win-bar"><i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i><span class="win-t">桌面版 · 主界面</span></div>
+          <img src="assets/app-main.png" alt="桌面版主界面：仓库地址、文件列表、线路测速" width="1150" height="778">
+        </div>
+        <figcaption>仓库地址一行一个，扫描后按平台筛选 · 底部实时显示各线路速度</figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <div class="win">
+          <div class="win-bar"><i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i><span class="win-t">桌面版 · 下载中</span></div>
+          <img src="assets/app-downloading.png" alt="桌面版下载中：实时速度、剩余时间、暂停与换线按钮" width="1150" height="778">
+        </div>
+        <figcaption>每个任务实时速度与剩余时间，慢了自己重启提速，也能手动暂停 / 换线路</figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <div class="win">
+          <div class="win-bar"><i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i><span class="win-t">桌面版 · 线路面板</span></div>
+          <img src="assets/app-routes.png" alt="桌面版线路测速面板，绿色为可用线路与实测速度" width="1150" height="778">
+        </div>
+        <figcaption>20 条线路并发测速，随时手动改选，连不上的会标注原因</figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <div class="win">
+          <div class="win-bar"><i class="wd wd-r"></i><i class="wd wd-y"></i><i class="wd wd-g"></i><span class="win-t">桌面版 · 断点续传</span></div>
+          <img src="assets/app-resume.png" alt="桌面版提示有文件没下完，可一键接着下载" width="1150" height="778">
+        </div>
+        <figcaption>关掉再开也不怕：没下完的文件列在顶部，点一下从断点接着下</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ START ============ -->
+  <section class="section wrap" id="start">
+    <header class="sec-head reveal">
+      <p class="eyebrow"><i></i>三步开始</p>
+      <h2>从下载到第一个文件，不到一分钟</h2>
+    </header>
+
+    <ol class="steps">
+      <li class="card step reveal">
+        <span class="step-n mono">01</span>
+        <h3>下载并运行</h3>
+        <p>Windows 双击 exe 就能开，macOS 解压后把 App 拖进「应用程序」。
+        不用安装、不写注册表，删掉即卸载。</p>
+      </li>
+      <li class="card step reveal">
+        <span class="step-n mono">02</span>
+        <h3>粘贴仓库地址</h3>
+        <p>一行一个，支持 <code>owner/repo</code>、GitHub 链接、<code>git@</code> 形式。
+        私有仓库可以填 Token。</p>
+      </li>
+      <li class="card step reveal">
+        <span class="step-n mono">03</span>
+        <h3>勾选并下载</h3>
+        <p>扫描后按平台筛选，勾上就开始。自动测速选线、分片并发、
+        按 <code>仓库/系统/</code> 归好目录。</p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============ DOWNLOAD ============ -->
+  <section class="section wrap" id="download">
+    <div class="dl card reveal">
+      <div class="dl-head">
+        <img src="assets/icon.png" alt="" width="52" height="52">
+        <div>
+          <h2>下载 Release 下载助手</h2>
+          <p class="dl-meta">最新版本 <b class="mono">v1.6.8</b> · 扩展 <b class="mono">v1.4.6</b> · 开源 MIT</p>
+        </div>
+      </div>
+
+      <div class="dl-grid">
+        <a class="dl-item" href="assets/downloads/GitHub-Release-Downloader-Desktop-v1.6.8.exe" download>
+          <span class="dl-os">Windows 10 / 11</span>
+          <span class="dl-name">单文件 exe</span>
+          <span class="dl-size mono">4.7 MB</span>
+          <span class="dl-go">下载 →</span>
+        </a>
+        <a class="dl-item" href="assets/downloads/GitHub-Release-Downloader-macOS-v1.6.8-universal.zip" download>
+          <span class="dl-os">macOS</span>
+          <span class="dl-name">通用版（Apple 芯片 + Intel）</span>
+          <span class="dl-size mono">4.3 MB</span>
+          <span class="dl-go">下载 →</span>
+        </a>
+        <a class="dl-item" href="assets/downloads/GitHub-Release-Downloader-Ext-v1.4.6-chrome.zip" download>
+          <span class="dl-os">Chrome / Edge / 360</span>
+          <span class="dl-name">浏览器扩展（Chromium）</span>
+          <span class="dl-size mono">89 KB</span>
+          <span class="dl-go">下载 →</span>
+        </a>
+        <a class="dl-item" href="assets/downloads/GitHub-Release-Downloader-Ext-v1.4.6-firefox.zip" download>
+          <span class="dl-os">Firefox</span>
+          <span class="dl-name">浏览器扩展（Firefox）</span>
+          <span class="dl-size mono">89 KB</span>
+          <span class="dl-go">下载 →</span>
+        </a>
+      </div>
+
+      <p class="dl-note">
+        文件托管在本站，<b>国内可直接下载</b>，不需要打开 GitHub。
+        Windows 首次运行可能提示「已保护你的电脑」：这是未购买代码签名导致的，
+        点「更多信息 → 仍要运行」即可；源码公开可自行编译。
+        <br>也可以去 <a href="https://github.com/ziyuanhuishequ/release-downloader/releases" target="_blank" rel="noopener">GitHub Releases</a> 或
+        <a href="https://github.com/ziyuanhuishequ/release-downloader" target="_blank" rel="noopener">查看源码</a>。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ FAQ ============ -->
+  <section class="section wrap" id="faq">
+    <header class="sec-head reveal">
+      <p class="eyebrow"><i></i>常见问题</p>
+      <h2>你可能想先知道的几件事</h2>
+    </header>
+
+    <div class="faq">
+      <details class="reveal">
+        <summary>「国内访问」是怎么实现的？会不会哪天就失效？</summary>
+        <p>它把 GitHub 的页面请求转发到几个公开的加速镜像上，属于「换条路走」，不是破解。
+        镜像失效是这个方案唯一的风险点，所以线路池是<b>可远端更新</b>的：内置 20 条兜底，
+        程序启动时会拉一次最新列表，也可以在设置里填自己的线路。某条不通只会被跳过，不会影响整体。</p>
+      </details>
+
+      <details class="reveal">
+        <summary>下载慢，或者有些线路显示「连不上」怎么办？</summary>
+        <p>先看是不是浏览器/系统这一层被拦了：关掉 Chrome 的「使用安全 DNS」、
+        检查代理软件有没有丢弃 <code>*.gh-proxy.com</code> 这类域名、临时关掉安全软件的联网防护。
+        扩展会按「实测够快 → 测不出但可达 → 测得慢 → 连不上」分档尝试，只要有一条真能用就会挑出来。</p>
+      </details>
+
+      <details class="reveal">
+        <summary>扩展怎么安装？</summary>
+        <p>下载 zip 解压到一个固定文件夹（别删），打开 <code>chrome://extensions</code>
+        （Edge 是 <code>edge://extensions</code>）→ 右上角打开「开发者模式」→
+        「加载已解压的扩展程序」→ 选中解压出来的文件夹。
+        Windows 上的 Chrome 不允许双击安装非商店来源的 .crx，所以只能这样装。</p>
+      </details>
+
+      <details class="reveal">
+        <summary>会上传我的仓库地址或 Token 吗？</summary>
+        <p>不会。扩展和桌面版都只把请求发往 GitHub 与你选中的镜像，没有自建的统计服务，
+        也不收集任何使用数据。Token 只用于你自己发起的 API 请求。</p>
+      </details>
+
+      <details class="reveal">
+        <summary>macOS 版打开提示「无法验证开发者」？</summary>
+        <p>因为没买苹果开发者签名。在「应用程序」里 <b>右键 → 打开</b>，或到
+        「系统设置 → 隐私与安全性」点「仍要打开」即可。源码和 CI 构建流程都在仓库里。</p>
+      </details>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="foot-brand">
+      <img src="assets/icon.png" alt="" width="28" height="28">
+      <span>Release 下载助手</span>
+      <span class="mono foot-ver">v1.6.8</span>
+    </div>
+    <nav class="foot-links" aria-label="页脚导航">
+      <a href="https://github.com/ziyuanhuishequ/release-downloader" target="_blank" rel="noopener">源码仓库</a>
+      <a href="https://github.com/ziyuanhuishequ/release-downloader/releases" target="_blank" rel="noopener">更新日志</a>
+      <a href="https://github.com/ziyuanhuishequ/release-downloader/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可证</a>
+    </nav>
+    <p class="foot-note">仅用于下载公开的软件发布文件，请遵守 GitHub 服务条款与各项目许可证。本页面与 GitHub 官方无关。</p>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>
