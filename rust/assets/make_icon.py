@@ -168,8 +168,24 @@ def _vs_block(key, value, value_len, wtype, children=b""):
     return struct.pack("<HHH", 6 + len(body), value_len, wtype) + body
 
 
-def version_blob(ver="1.6.7.0"):
+def cargo_version():
+    """从 Cargo.toml 读版本号，避免 exe 属性里的版本和实际代码版本对不上。
+
+    之前这里写死成 1.6.7.0，导致 1.6.8 的 exe 属性里仍显示 1.6.7。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    toml = os.path.join(here, "..", "Cargo.toml")
+    with open(toml, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("version") and "=" in line:
+                return line.split("=", 1)[1].strip().strip('"')
+    raise SystemExit("读不到 rust/Cargo.toml 里的 version")
+
+
+def version_blob(ver=None):
     """生成 RT_VERSION 资源：让 exe 属性里能看到名称与版本号"""
+    ver = ver or (cargo_version() + ".0")
     desc = "GitHub Release 下载整理工具"
     nums = [int(x) for x in ver.split(".")]
     while len(nums) < 4:
