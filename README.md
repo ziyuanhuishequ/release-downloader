@@ -25,13 +25,13 @@
 
 | 用途 | 文件 |
 | --- | --- |
-| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.8.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.8/GitHub-Release-Downloader-Desktop-v1.6.8.exe) |
-| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.8-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.8/GitHub-Release-Downloader-macOS-v1.6.8-universal.zip) |
+| Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.9.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.9/GitHub-Release-Downloader-Desktop-v1.6.9.exe) |
+| macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.9-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.9/GitHub-Release-Downloader-macOS-v1.6.9-universal.zip) |
 | Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip) |
 | Firefox | [`GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip) |
 
-桌面版在 [v1.6.8](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/v1.6.8)（同一个 Release 里还有
-`GitHub-Release-Downloader-Source-v1.6.8.zip` Rust 源码）；浏览器扩展在
+桌面版在 [v1.6.9](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/v1.6.9)（同一个 Release 里还有
+`GitHub-Release-Downloader-Source-v1.6.9.zip` Rust 源码）；浏览器扩展在
 [ext-v1.4.7](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.7)，
 每个历史版本都单独发一个 Release，方便回退。
 
@@ -61,7 +61,8 @@
   线路慢了 5.5 秒自动换下一条；实测同一文件 30 KB/s → 200–300 KB/s
 - **多仓库批量扫描**：一行一个 `owner/repo`，一次扫完所有仓库的 Release
 - **只取最新版**：可过滤掉历史版本，也可手动点选需要的那几个文件
-- **自动归档**：按 `仓库/系统/` 建子文件夹，Windows / macOS / Linux 各归各位
+- **自动归档**：按 `仓库/系统/` 建子文件夹，Windows / macOS / Linux / Android 各归各位，
+  安卓的 `.apk/.aab` 不会再被丢进「其他」
 - **多连接分片下载**：大文件自动切成 4 / 6 / 8 段并发，失败自动回退单连接
 - **卡顿自愈**：10 秒没进展的连接自动断开重连，比同伴慢一大截的分片主动踢掉换线路，
   界面会写明「正在换线路，约 5~15 秒恢复」，不用人工干预
@@ -100,7 +101,7 @@
 
 ## 使用
 
-1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.8.exe`，双击运行，无需安装
+1. 按上面的[下载表](#下载)拿 `GitHub-Release-Downloader-Desktop-v1.6.9.exe`，双击运行，无需安装
 2. 在仓库框里填入 `owner/repo`，多个用换行分隔
 3. 点「扫描 Release」，列表出来后勾选需要的文件
 4. 选好保存目录，点「开始下载」

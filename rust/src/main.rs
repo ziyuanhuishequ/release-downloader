@@ -15,12 +15,12 @@ use eframe::egui;
 use serde_json::Value;
 
 const APP_NAME: &str = "GitHub Release 下载整理工具";
-const APP_VERSION: &str = "1.6.8";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 检测更新要查的仓库
 const REPO_SLUG: &str = "ziyuanhuishequ/release-downloader";
 /// 顶栏 GitHub 小图标：64x64 原始 RGBA，和 app 图标一样走 NEAREST 采样
 const GH_ICON_RGBA: &[u8] = include_bytes!("../assets/gh.rgba");
-const USER_AGENT: &str = "ReleaseOrganizer/1.6.8";
+const USER_AGENT: &str = concat!("ReleaseOrganizer/", env!("CARGO_PKG_VERSION"));
 
 /// 断点续传的清单文件后缀：和目标文件放在同一个目录，记下原始下载地址与大小
 const META_EXT: &str = ".part.meta";
@@ -524,17 +524,27 @@ enum Msg {
 
 const WIN_EXTS: &[&str] = &[".exe", ".msi", ".msix", ".appx", ".msixbundle"];
 const MAC_EXTS: &[&str] = &[".dmg", ".pkg", ".mpkg"];
+// 安卓安装包：apk 最常见，aab 是上架 Play 用的，apks/xapk 是分包
+const ANDROID_EXTS: &[&str] = &[".apk", ".aab", ".apks", ".xapk"];
+// Linux 安装包：deb/rpm 是发行版包，AppImage 免安装，snap/flatpak 是沙箱包
+const LINUX_EXTS: &[&str] = &[".deb", ".rpm", ".appimage", ".snap", ".flatpak"];
 const AMBIG_EXTS: &[&str] = &[
     ".zip", ".7z", ".tar", ".gz", ".tgz", ".xz", ".bz2", ".zst", ".tar.gz", ".tar.xz",
     ".tar.bz2", ".tar.zst", "",
 ];
 const WIN_KEYS: &[&str] = &[
-    "windows", "win32", "win64", "win-", "_win", "-win", "setup.exe", "installer.exe",
+    // win7 / win10 这类带系统版本号的写法很常见，光有 "win-" 认不出来
+    "windows", "win32", "win64", "win7", "win8", "win10", "win11", "win-", "_win", "-win",
+    "setup.exe", "installer.exe",
 ];
 const MAC_KEYS: &[&str] = &[
     "macos", "mac-os", "mac_os", "darwin", "osx", "apple", "universal", "mac.", "mac-", "-mac",
     "_mac",
 ];
+const LINUX_KEYS: &[&str] = &[
+    "linux", "ubuntu", "debian", "fedora", "appimage", "musl", "gnu-", "glibc",
+];
+const ANDROID_KEYS: &[&str] = &["android"];
 
 fn detect_arch(name: &str) -> String {
     let low = name.to_lowercase();
@@ -584,20 +594,31 @@ fn classify(name: &str) -> (String, String, String) {
     let ext = ext_of(name);
     let arch = detect_arch(name);
 
+    // 安卓先判：.apk/.aab 不可能是别的平台，晚判会被当成「其他」
+    if ANDROID_EXTS.contains(&ext.as_str()) || ANDROID_KEYS.iter().any(|k| low.contains(k)) {
+        return ("android".into(), "Android".into(), arch);
+    }
     if WIN_EXTS.contains(&ext.as_str()) {
         return ("windows".into(), "Windows".into(), arch);
     }
     if MAC_EXTS.contains(&ext.as_str()) {
         return ("macos".into(), "macOS".into(), arch);
     }
+    if LINUX_EXTS.contains(&ext.as_str()) {
+        return ("linux".into(), "Linux".into(), arch);
+    }
     let has_win = WIN_KEYS.iter().any(|k| low.contains(k));
     let has_mac = MAC_KEYS.iter().any(|k| low.contains(k));
+    let has_linux = LINUX_KEYS.iter().any(|k| low.contains(k));
 
     if is_ambiguous_ext(&ext) {
-        if has_mac && !has_win {
+        if has_linux && !has_win && !has_mac {
+            return ("linux".into(), "Linux".into(), arch);
+        }
+        if has_mac && !has_win && !has_linux {
             return ("macos".into(), "macOS".into(), arch);
         }
-        if has_win && !has_mac {
+        if has_win && !has_mac && !has_linux {
             return ("windows".into(), "Windows".into(), arch);
         }
         if has_win && has_mac {
@@ -3399,6 +3420,18 @@ fn platform_badge(ui: &mut egui::Ui, folder: &str) {
             egui::Color32::from_rgb(10, 128, 100),
             egui::Color32::from_rgb(206, 245, 232),
         ),
+        "Linux" => pill(
+            ui,
+            "Linux",
+            egui::Color32::from_rgb(150, 92, 6),
+            egui::Color32::from_rgb(255, 236, 190),
+        ),
+        "Android" => pill(
+            ui,
+            "Android",
+            egui::Color32::from_rgb(58, 140, 60),
+            egui::Color32::from_rgb(214, 245, 208),
+        ),
         _ => pill(ui, "其他", TEXT2, SOFT),
     }
 }
@@ -3949,15 +3982,19 @@ impl eframe::App for App {
                     self.errors = errors;
                     let w = self.rows.iter().filter(|r| r.folder == "Windows").count();
                     let m = self.rows.iter().filter(|r| r.folder == "macOS").count();
+                    let l = self.rows.iter().filter(|r| r.folder == "Linux").count();
+                    let a = self.rows.iter().filter(|r| r.folder == "Android").count();
                     self.status = if self.rows.is_empty() {
                         "没有扫描到可下载的资源".into()
                     } else {
                         format!(
-                            "共 {} 个文件：Windows {} · macOS {} · 其他 {}",
+                            "共 {} 个文件：Windows {} · macOS {} · Linux {} · 安卓 {} · 其他 {}",
                             self.rows.len(),
                             w,
                             m,
-                            self.rows.len() - w - m
+                            l,
+                            a,
+                            self.rows.len() - w - m - l - a
                         )
                     };
                     if self.demo {
@@ -4778,6 +4815,20 @@ impl eframe::App for App {
                                 {
                                     do_probe = true;
                                 }
+                                if pixel_button(ui, "仅安卓", 0.0, 34.0, BtnKind::Ghost, true)
+                                    .clicked()
+                                {
+                                    for r in self.rows.iter_mut() {
+                                        r.selected = r.folder == "Android";
+                                    }
+                                }
+                                if pixel_button(ui, "仅 Linux", 0.0, 34.0, BtnKind::Ghost, true)
+                                    .clicked()
+                                {
+                                    for r in self.rows.iter_mut() {
+                                        r.selected = r.folder == "Linux";
+                                    }
+                                }
                                 if pixel_button(ui, "仅 macOS", 0.0, 34.0, BtnKind::Ghost, true)
                                     .clicked()
                                 {
@@ -5331,4 +5382,60 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 用户报的现场：qianyiai/KuroCat v5.1.3 的 10 个资源
+    #[test]
+    fn classify_kurocat_assets() {
+        let cases = [
+            ("KuroCat-5.1.3-x64-setup.exe", "Windows"),
+            ("KuroCat-v5.1.3-android.apk", "Android"),
+            ("KuroCat-v5.1.3-linux-amd64.AppImage", "Linux"),
+            ("KuroCat-v5.1.3-linux-amd64.deb", "Linux"),
+            ("KuroCat-v5.1.3-linux-arm64.AppImage", "Linux"),
+            ("KuroCat-v5.1.3-linux-arm64.deb", "Linux"),
+            ("KuroCat-v5.1.3-macos-universal.app.tar.gz", "macOS"),
+            ("KuroCat-v5.1.3-macos-universal.dmg", "macOS"),
+            ("KuroCat-v5.1.3-win7-x64-portable.zip", "Windows"),
+            ("KuroCat-v5.1.3-win7-x86-portable.zip", "Windows"),
+        ];
+        for (name, want) in cases {
+            let (_, folder, _) = classify(name);
+            assert_eq!(folder, want, "{} 被分到了 {}", name, folder);
+        }
+    }
+
+    #[test]
+    fn classify_common_assets() {
+        let cases = [
+            ("tool-x86_64-unknown-linux-gnu.tar.gz", "Linux"),
+            ("tool-x86_64-pc-windows-msvc.zip", "Windows"),
+            ("tool-aarch64-apple-darwin.tar.gz", "macOS"),
+            ("app-1.0.0-universal2.dmg", "macOS"),
+            ("app-release.apk", "Android"),
+            ("app-release.aab", "Android"),
+            ("app_1.0.0_amd64.deb", "Linux"),
+            ("app-1.0.0-x86_64.rpm", "Linux"),
+            ("app-1.0.0.AppImage", "Linux"),
+            ("source.tar.gz", "Others"),
+        ];
+        for (name, want) in cases {
+            let (_, folder, _) = classify(name);
+            assert_eq!(folder, want, "{} 被分到了 {}", name, folder);
+        }
+    }
+
+    /// 归档目录是「仓库名/系统/」，文件名里也带系统，方便脱离目录也能认出来
+    #[test]
+    fn target_name_keeps_platform() {
+        let t = build_target_name("qianyiai/KuroCat", "v5.1.3", "KuroCat-v5.1.3-android.apk", "Android", "unknown");
+        assert!(t.contains("Android"), "{}", t);
+        assert!(t.starts_with("KuroCat-"), "{}", t);
+        let w = build_target_name("qianyiai/KuroCat", "v5.1.3", "KuroCat-v5.1.3-win7-x64-portable.zip", "Windows", "x64");
+        assert!(w.contains("Windows"), "{}", w);
+    }
 }
