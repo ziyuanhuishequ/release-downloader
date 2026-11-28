@@ -179,12 +179,15 @@ macOS：同一份源码直接 `cargo build --release` 即可（`build.rs` 只在
 
 ### 改版本号
 
-四处要同步修改，否则 exe 属性和窗口显示会对不上：
+三处要同步修改，否则 exe 属性和窗口显示会对不上：
 
 1. `rust/Cargo.toml` → `version`
 2. `rust/src/main.rs` → `const APP_VERSION`
 3. `rust/src/main.rs` → `const USER_AGENT`
-4. `rust/assets/make_icon.py` → `version_blob(ver=...)`，然后 `python rust/assets/make_icon.py` 重新生成图标资源
+
+改完再跑一次 `python rust/assets/make_icon.py` 重新生成图标资源。
+它的版本号现在直接从 `Cargo.toml` 读取，不用再单独改（1.6.8 之前写死在脚本里，
+导致 exe 属性显示的是旧版本）。
 
 ### 图标资源
 
