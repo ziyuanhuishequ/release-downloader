@@ -122,6 +122,12 @@
     return left > 0 ? '冷却 ' + left + ' 分' : '冷却中';
   }
 
+  /* 「慢」和「坏」分开显示：慢只是这一轮排到后面，还能选、还能下 */
+  function slowTxt(until) {
+    var left = Math.ceil(((until || 0) - Date.now()) / 60000);
+    return left > 0 ? '慢 ' + left + ' 分' : '刚慢过';
+  }
+
   function renderRouteList() {
     var box = $('rlist');
     if (!box) return;
@@ -146,11 +152,13 @@
       else speed = '未测';
       var cls = (pb && pb.ok) || r.score > 0 ? 'ok' : (pb && !pb.ok ? 'bad' : '');
       if (r.cooling) cls = 'bad';
+      var slow = !r.cooling && (r.slowUntil || 0) > Date.now();
+      var note = r.cooling ? coolTxt(r.coolUntil) : (slow ? slowTxt(r.slowUntil) : speed);
       var star = !!st.prefer && st.prefer === prefKey(r.prefix);
       return '<div class="rline ' + cls + (star ? ' pref' : '') + '" data-prefix="' + esc(prefKey(r.prefix)) +
         '" title="点一下固定用这条线路，再点取消">' +
         '<span class="rn">' + (star ? '★ ' : '') + esc(r.name || '直连') + '</span>' +
-        '<span class="rs">' + esc(r.cooling ? coolTxt(r.coolUntil) : speed) + '</span></div>';
+        '<span class="rs">' + esc(note) + '</span></div>';
     }).join('') || '<div class="rline"><span class="rn">线路池还没加载，点下面「更新线路池」</span></div>';
     var pool = st.pool;
     var poolTxt = pool
@@ -236,7 +244,10 @@
 
         html += '<div class="task' + (t.status === 'paused' ? ' is-pause' : '') + '">' +
           '<div class="tn"><span class="tname">' + esc(t.name) + '</span>' +
-          (t.route ? '<span class="trt">' + esc(t.route) + '</span>' : '') + tag + '</div>' +
+          (t.route
+            ? '<span class="trt"' + (t.routeRotations ? ' title="已自动换线 ' + t.routeRotations + ' 次"' : '') + '>' +
+              esc(t.route) + (t.routeRotations ? ' ↻' + t.routeRotations : '') + '</span>'
+            : '') + tag + '</div>' +
           '<div class="tb"><div class="bar' + (t.status === 'paused' ? ' pause' : '') +
             '"><i style="width:' + pct + '%"></i></div>' +
           '<span class="tm">' + esc(meta) + '</span></div>' +

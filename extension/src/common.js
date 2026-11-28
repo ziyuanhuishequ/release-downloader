@@ -16,7 +16,7 @@ var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.7',
+  version: '1.4.8',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -109,11 +109,13 @@ var API_CHANNELS = [
   { name: 'ghproxy.net', base: 'https://ghproxy.net/' + API_BASE }
 ];
 
-var MIRROR_TIMEOUT_MS = 5500;   // 单条线路测速上限：5.5 秒内拉不完 96KB（<17KB/s）本来也不值得选
-/* 每条线路试拉 96KB 估速度。原来 256KB × 20 条 = 一次测速吃掉 5MB 流量，
- * 换到手机热点或按流量计费的网络上很难受；96KB 已经足够区分快慢。 */
-var PROBE_BYTES = 98304;
-var PROBE_TTL_MS = 10 * 60 * 1000;
+var MIRROR_TIMEOUT_MS = 6000;   // 单条线路测速上限：到点还拉不完就按「已经拿到的字节」算速度
+/* 每条线路试拉 256KB 估速度。
+ * 以前只读 96KB，镜像前 96KB 常常是「首包爆发」，测出来 2MB/s，真正下起来掉到 80KB/s，
+ * 于是永远挑中那条被限速的线路。256KB 能覆盖一次典型的限速拐点，又不至于太费流量
+ * （20 条并行 = 5MB 上限，而且到点就停，慢线路拿不到这么多）。 */
+var PROBE_BYTES = 262144;
+var PROBE_TTL_MS = 5 * 60 * 1000;   // 镜像限速是动态的，测速结果别放太久
 var PROBE_TTL_FAIL_MS = 90 * 1000;   // 全部失败的结果只缓存 90 秒，避免一次抖动长期误导
 
 /* ---------- 线路池（可动态更新） ----------

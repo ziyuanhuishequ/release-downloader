@@ -332,7 +332,10 @@
 
       html += '<div class="q' + (t.status === 'paused' ? ' pz' : '') + '">' +
         '<div class="qn"><span class="nmx">' + esc(t.name) + '</span>' +
-        (t.route ? '<span class="rt2">' + esc(t.route) + '</span>' : '') + flag + '</div>' +
+        (t.route
+          ? '<span class="rt2"' + (t.routeRotations ? ' title="已自动换线 ' + t.routeRotations + ' 次"' : '') + '>' +
+            esc(t.route) + (t.routeRotations ? ' ↻' + t.routeRotations : '') + '</span>'
+          : '') + flag + '</div>' +
         '<div class="qb"><div class="qbar' + (t.status === 'paused' ? ' pause' : '') +
         '"><i style="width:' + pct + '%"></i></div>' +
         '<span class="qmeta">' + esc(meta) + '</span></div>' +

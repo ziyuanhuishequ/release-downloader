@@ -21,7 +21,7 @@
 ### Chrome / Edge / Brave / 360 / QQ
 
 1. 从 [Releases](https://github.com/ziyuanhuishequ/release-downloader/releases) 下载
-   `GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip`
+   `GitHub-Release-Downloader-Ext-v1.4.8-chrome.zip`
 2. 解压到一个**固定位置**（别放临时目录，目录删了扩展就失效）
 3. 打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开「开发者模式」
 4. 点「加载已解压的扩展程序」，选中解压出来的文件夹
@@ -31,7 +31,7 @@
 
 ### Firefox
 
-1. 下载 `GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip` 并解压
+1. 下载 `GitHub-Release-Downloader-Ext-v1.4.8-firefox.zip` 并解压
 2. 地址栏打开 `about:debugging#/runtime/this-firefox`
 3. 点「临时载入附加组件」，选中解压目录里的 `manifest.json`
 
@@ -51,12 +51,13 @@ Firefox 的临时载入在重启后失效。要长期使用，建议用 Chrome /
 
 两种方式都支持：
 - 全选 / 按平台筛选
-- 自动测速 20 条加速线路，优先走最快的那条
+- 自动测速 20 条加速线路，优先走最快的那条（读 256KB，按「读到最后还快不快」算，首包爆发骗不过去）
 - 多线程分片：1MB 以上的文件切成 2~6 片并发（都在最快的那条线路上），下完自动拼装
 - 每条任务显示实时速度、剩余时间；速度慢会自动「暂停→继续」重连（最多 5 次）
 - 每个任务都能**暂停 / 继续**：分片任务会把已下好的分片留在内存里，继续时接着要剩下的字节，不重下
 - 队列里可以手动「换线路」「取消」，不用等它慢慢下完
-- 某一片 20 秒没动静会自动断开换线路，不会卡死在一条死连接上
+- 某一片 9 秒没动静会自动断开换线路；比其他片慢一大截时也会单独给它换线
+- 换线路不从头再来：只把剩余字节换到下一条线路，已下部分一个字节不丢（最多 12 次）
 - 下载前先探一字节校验（防镜像返回网页），不对自动换线
 - 断线、5xx 自动降级到备用线路重试，坏线路冷却 3 分钟
 - 按 `下载/仓库名/系统/文件名` 归档（Windows / macOS / Linux / Android 各一个文件夹），可选关掉

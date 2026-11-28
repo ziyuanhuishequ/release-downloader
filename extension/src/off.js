@@ -9,7 +9,7 @@
 
   var jobs = new Map();      // id -> {ctrl, parts, received, total, aborted, chunks}
   var MIN_CHUNK = 256 * 1024;
-  var STALL_MS = 9000;       // 这么久没有新字节，就认为连接卡死，立刻换线重连
+  var STALL_MS = 6000;       // 这么久没有新字节，就认为连接卡死，立刻换线重连
 
   function post(payload) {
     try {
@@ -59,9 +59,66 @@
       // 全部片先压在同一条最快的线路上：实测同线路 4 连接 188KB/s，
       // 拆到 4 条线路只有 92KB/s（整体耗时被最慢那条拖住）。
       // 某片出错时 urlIdx 会自增，自动改用下一条线路。
-      parts.push({ start: start, end: end, got: 0, chunks: [], urlIdx: 0, fails: 0 });
+      parts.push({
+        idx: i, start: start, end: end, need: end - start + 1,
+        got: 0, chunks: [], urlIdx: 0, fails: 0, rescues: 0,
+        ctrl: null, lastT: Date.now(), lastGot: 0, lastRate: 0, bornAt: Date.now()
+      });
     }
     return parts;
+  }
+
+  /* 每 4 秒比一次「哪片明显掉队」。
+   * 单连接被限速时不会报错，就是慢慢爬，光看「有没有数据」发现不了；
+   * 跟同伴比才知道它是在爬 —— 这时只把这一片的剩余区间换到下一条线路，
+   * 其它片继续跑，已经下的字节不丢。桌面版就是靠这一招在限速后拉回速度的。 */
+  function startTick(job) {
+    stopTick(job);
+    job.tick = setInterval(function () {
+      if (job.aborted || job.paused || !job.parts || !job.parts.length) return;
+      var now = Date.now();
+      var maxRate = 0;
+      job.parts.forEach(function (p) {
+        /* 已经下完的片也是参照物：它证明「这条线刚才能跑多快」。
+         * 不然只剩一片在爬时没有对比对象，救援永远不触发。 */
+        if (p.got >= p.need) {
+          if (!p.doneAt) p.doneAt = now;
+          if (now - p.doneAt < 15000 && (p.lastRate || 0) > maxRate) maxRate = p.lastRate;
+          return;
+        }
+        p.doneAt = 0;
+        if (!p.lastT) { p.lastT = now; p.lastGot = p.got; return; }
+        var dt = (now - p.lastT) / 1000;
+        var d = p.got - (p.lastGot || 0);
+        p.lastRate = dt > 0.8 ? d / dt : (p.lastRate || 0);
+        p.lastGot = p.got;
+        p.lastT = now;
+        if (p.lastRate > maxRate) maxRate = p.lastRate;
+      });
+      // 整体就慢：交给后台换线路，这里别乱动
+      if (maxRate < 40 * 1024) return;
+      job.parts.forEach(function (p) {
+        if (p.got >= p.need || !p.lastRate) return;
+        if ((p.rescues || 0) >= 5) return;
+        /* 既「比同伴慢一大截」又「绝对值也不快」才救：同伴 2MB/s、它 400KB/s 这种
+         * 本来就够用，别为了追峰值来回重连。 */
+        if (p.lastRate < maxRate * 0.3 && p.lastRate < 320 * 1024) {
+          p.rescues = (p.rescues || 0) + 1;
+          p.urlIdx++;
+          p.stalled = false;
+          p.lastT = Date.now();
+          p.lastGot = p.got;
+          if (p.ctrl) { try { p.ctrl.abort(); } catch (e) {} }
+        }
+      });
+    }, 4000);
+  }
+
+  function stopTick(job) {
+    if (job && job.tick) {
+      clearInterval(job.tick);
+      job.tick = 0;
+    }
   }
 
   function reportSpeed(job) {
@@ -94,13 +151,14 @@
   }
 
   async function fetchPart(job, part) {
-    var need = part.end - part.start + 1;
+    var need = part.need || (part.end - part.start + 1);
     // 没下完就继续：被「提速」打断时按剩余范围重新要，已经下好的不丢
     while (part.got < need) {
       if (job.aborted) return;
       if (job.paused) { await waitResume(job); continue; }
       part.stalled = false;
       var once = new AbortController();
+      part.ctrl = once;               // 让「掉队救援 / 整体换线」能精确掐断这一片
       var onAbort = function () { try { once.abort(); } catch (e) {} };
       job.aborts.push(onAbort);
       try {
@@ -118,10 +176,14 @@
         part.urlIdx++;
         continue;
       } finally {
+        part.ctrl = null;
         var i = job.aborts.indexOf(onAbort);
         if (i >= 0) job.aborts.splice(i, 1);
       }
     }
+    /* 这一片下完了：记下它的平均速度，给「谁在拖后腿」当参照。
+     * 没有这个，快的片早就下完、慢的片就成了唯一在飞的，救援永远比不出来。 */
+    part.lastRate = part.got / Math.max(0.2, (Date.now() - (part.bornAt || Date.now())) / 1000);
   }
 
   /* 拉一段连续区间。带看门狗：镜像限速到 0 时连接会一直挂着不报错，
@@ -195,7 +257,9 @@
       job.total = total;
       var parts = makeParts(total, job.threads, job.urls.length);
       job.parts = parts;
+      startTick(job);
       await Promise.all(parts.map(function (p) { return fetchPart(job, p); }));
+      stopTick(job);
       if (job.aborted) return;
       var blobs = parts.map(function (p) { return new Blob(p.chunks); });
       // 必须带上 octet-stream：Blob 不带类型时 Chrome 会当成文本，存盘会多出 .txt 后缀
@@ -205,6 +269,7 @@
       jobs.delete(job.id);
       post({ type: 'seg-done', id: job.id, url: url, total: total });
     } catch (e) {
+      stopTick(job);
       if (job.aborted) return;
       jobs.delete(job.id);
       post({ type: 'seg-error', id: job.id, message: (e && e.message) || String(e) });
@@ -219,7 +284,7 @@
       var job = {
         id: msg.id, url: urls[0], urls: urls, size: msg.size || 0, threads: msg.threads || 4,
         ctrl: new AbortController(), received: 0, total: 0, speed: 0,
-        lastT: 0, lastB: 0, aborted: false, aborts: [],
+        lastT: 0, lastB: 0, aborted: false, aborts: [], parts: null, tick: 0,
         paused: false, waiters: []
       };
       jobs.set(msg.id, job);
@@ -254,10 +319,31 @@
         bj.aborts.slice().forEach(function (fn) { try { fn(); } catch (e) {} });
         bj.lastT = 0;   // 重新算速度，别拿旧基准
       }
+    } else if (msg.type === 'seg-rotate') {
+      /* 整体换线：把每一片的剩余区间挪到下一条线路。
+       * 关键点是「不重来」—— chunks 一律保留，只换接下来要数据的那条线。
+       * toUrl 指定就跳到那条，没指定就各自往后挪一条。 */
+      var rj2 = jobs.get(msg.id);
+      if (rj2 && !rj2.aborted) {
+        var target = msg.toUrl ? rj2.urls.indexOf(msg.toUrl) : -1;
+        (rj2.parts || []).forEach(function (p) {
+          if (p.got >= p.need) return;
+          if (target >= 0) p.urlIdx = target;
+          else p.urlIdx = (p.urlIdx + 1) % rj2.urls.length;
+          p.stalled = false;
+          p.rescues = 0;
+          p.lastT = Date.now();
+          p.lastGot = p.got;
+          if (p.ctrl) { try { p.ctrl.abort(); } catch (e) {} }
+        });
+        rj2.lastT = 0;
+        rj2.lastB = rj2.received;
+      }
     } else if (msg.type === 'seg-abort') {
       var j = jobs.get(msg.id);
       if (j) {
         j.aborted = true;
+        stopTick(j);
         try { j.ctrl.abort(); } catch (e) {}
         var w = j.waiters;          // 暂停中又被取消：把等待中的分片叫醒，让它们自己退出
         j.waiters = [];

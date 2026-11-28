@@ -212,5 +212,130 @@ console.log('\n[7] 冷却时长与历史统计');
   ok('清空后写入新版本号', store.routeStatsVer === 2, String(store.routeStatsVer));
 }
 
+/* ---------- 8. 分片任务换线：保留已下字节，不从头开始 ---------- */
+console.log('\n[8] 分片任务慢 → 换线路但不丢进度');
+{
+  const tick = () => new Promise((r) => globalThis.setTimeout(r, 30));
+  const A = 'https://gh-proxy.com/';
+  const B = 'https://gh-proxy.org/';
+  const url = 'https://github.com/a/b/releases/download/v1/x.bin';
+  const pool = [
+    { name: 'gh-proxy.com', prefix: A, url: A + url },
+    { name: 'gh-proxy.org', prefix: B, url: B + url }
+  ];
+  const task = {
+    id: 't8', url, path: 'x.bin', name: 'x.bin',
+    status: 'downloading', segmented: true, speed: 18 * 1024, bestSpeed: 40 * 1024,
+    received: 7 * 1024 * 1024, total: 40 * 1024 * 1024, size: 40 * 1024 * 1024,
+    routePrefix: A, routeIdx: 0, routeTries: 0, routeRotations: 0,
+    segPool: pool, slowSince: Date.now() - 7000
+  };
+  ctx.tasks.length = 0;
+  ctx.tasks.push(task);
+  ctx.badUntil.clear();
+  ctx.slowUntil.clear();
+  ctx.judgeSlow(task);
+  await tick();
+  ok('慢到 6.5 秒就换线路', task.routeRotations === 1, 'rotations=' + task.routeRotations);
+  ok('换到了下一条线路', task.routePrefix === B, task.routePrefix);
+  ok('已经下好的 7MB 没有被清零', task.received === 7 * 1024 * 1024, String(task.received));
+  ok('任务仍在下载（不是重来）', task.status === 'downloading', task.status);
+  ok('慢线路只是降权，没有记成失败', !ctx.badUntil.get(A), String(ctx.badUntil.get(A) || 0));
+  ok('降权有生效（90 秒内排后面）', (ctx.slowUntil.get(A) || 0) > Date.now(), String(ctx.slowUntil.get(A) || 0));
+
+  // 轮满 12 次后停手，别在池子里无限打转
+  task.routeRotations = 12;
+  task.slowSince = Date.now() - 20000;
+  ctx.judgeSlow(task);
+  await tick();
+  ok('换满 12 次后收手', task.routeRotations === 12, String(task.routeRotations));
+
+  // 速度还在 100KB/s（高于 40KB/s 的「慢」阈值），但比峰值掉了 90% → 也要换线
+  const dip = {
+    id: 't8c', url, path: 'x.bin', status: 'downloading', segmented: true,
+    speed: 100 * 1024, bestSpeed: 1200 * 1024, received: 5 * 1024 * 1024,
+    total: 40 * 1024 * 1024, size: 40 * 1024 * 1024,
+    routePrefix: A, routeIdx: 0, routeTries: 0, routeRotations: 0,
+    segPool: pool, slowSince: Date.now() - 7000
+  };
+  ctx.tasks.length = 0;
+  ctx.tasks.push(dip);
+  ctx.badUntil.clear();
+  ctx.slowUntil.clear();
+  ctx.judgeSlow(dip);
+  await tick();
+  ok('比峰值掉到 35% 以下也换线（不只是 40KB/s 以下）', dip.routeRotations === 1, 'rotations=' + dip.routeRotations);
+  ok('换线后峰值重算（不会拿旧峰值一直判它慢）', dip.bestSpeed === 0, String(dip.bestSpeed));
+
+  // 单连接任务不受影响：还是老行为（重下）
+  const plain = {
+    id: 't8b', url, path: 'x.bin', status: 'downloading', segmented: false,
+    speed: 18 * 1024, bestSpeed: 20 * 1024, received: 100 * 1024,
+    total: 40 * 1024 * 1024, size: 40 * 1024 * 1024,
+    routePrefix: A, routeIdx: 0, routeTries: 0, slowSince: Date.now() - 7000
+  };
+  ctx.tasks.length = 0;
+  ctx.tasks.push(plain);
+  ctx.judgeSlow(plain);
+  await tick();
+  ok('单连接仍走「换线重下」', plain.routeTries === 1 && plain.routePrefix !== A, plain.routeTries + '/' + plain.routeIdx + '/' + plain.routePrefix);
+}
+
+
+/* ---------- 9. 速度「不算慢但也没跑起来」：主动试更快的线路 ---------- */
+console.log('\n[9] 200KB/s 的匀速下载也会去试更快的线路');
+{
+  const tick = () => new Promise((r) => globalThis.setTimeout(r, 30));
+  const A = 'https://gh-proxy.com/';
+  const B = 'https://gh-proxy.org/';
+  const C = 'https://ghfast.top/';
+  const url = 'https://github.com/a/b/releases/download/v1/x.bin';
+  const pool = [
+    { name: 'gh-proxy.com', prefix: A, url: A + url },
+    { name: 'gh-proxy.org', prefix: B, url: B + url },
+    { name: 'ghfast.top', prefix: C, url: C + url }
+  ];
+  // 测速结果：B 明显更快
+  ctx.probeCache = {
+    key: 'k', ts: Date.now(), okCount: 3, blocked: 0, probeUrl: url,
+    list: [
+      { name: 'gh-proxy.com', prefix: A, ok: true, bps: 200 * 1024 },
+      { name: 'gh-proxy.org', prefix: B, ok: true, bps: 900 * 1024 },
+      { name: 'ghfast.top', prefix: C, ok: true, bps: 120 * 1024 }
+    ]
+  };
+  const task = {
+    id: 't9', url, path: 'x.bin', status: 'downloading', segmented: true,
+    speed: 200 * 1024, bestSpeed: 200 * 1024, received: 5 * 1024 * 1024,
+    total: 60 * 1024 * 1024, size: 60 * 1024 * 1024,
+    routePrefix: A, routeIdx: 0, routeTries: 0, routeRotations: 0,
+    segPool: pool, segTried: [A], slowSince: Date.now() - 9000
+  };
+  ctx.tasks.length = 0;
+  ctx.tasks.push(task);
+  ctx.badUntil.clear();
+  ctx.slowUntil.clear();
+  ctx.judgeSlow(task);
+  await tick();
+  ok('不是「慢」也换线（200KB/s < 480KB/s）', task.routeRotations === 1, 'rotations=' + task.routeRotations);
+  ok('换到测速最快的那条（gh-proxy.org），而不是随便一条', task.routePrefix === B, task.routePrefix);
+  ok('进度同样保留', task.received === 5 * 1024 * 1024, String(task.received));
+
+  // 没有「明显更快」的候选时不许瞎折腾
+  const task2 = {
+    id: 't9b', url, path: 'x.bin', status: 'downloading', segmented: true,
+    speed: 300 * 1024, bestSpeed: 300 * 1024, received: 5 * 1024 * 1024,
+    total: 60 * 1024 * 1024, size: 60 * 1024 * 1024,
+    routePrefix: A, routeIdx: 0, routeTries: 0, routeRotations: 0,
+    segPool: pool, segTried: [A, B], slowSince: Date.now() - 9000
+  };
+  ctx.probeCache.list[1].bps = 350 * 1024;   // 只快 1.17 倍，达不到 1.4 倍
+  ctx.tasks.length = 0;
+  ctx.tasks.push(task2);
+  ctx.judgeSlow(task2);
+  await tick();
+  ok('候选没有明显更快就不换（不来回跳）', task2.routeRotations === 0, 'rotations=' + task2.routeRotations);
+}
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

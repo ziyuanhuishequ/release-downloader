@@ -23,6 +23,7 @@ var tasks = [];              // 全部任务（含已完成，最多保留 50 �
 var activeIds = new Map();   // downloadId -> task
 var pumping = false;
 var badUntil = new Map();    // routePrefix -> 时间戳，短时间不再用
+var slowUntil = new Map();   // routePrefix -> 时间戳，不是坏了，只是「刚才下得慢」，暂时排后面
 var probeCache = null;       // {key, ts, list}
 var segTasks = new Map();    // taskId -> task，正在分片下载的
 var settingsCache = null;    // 事件回调里不反复读 storage
@@ -63,6 +64,14 @@ var AUTO_SWITCH_MS = 16000;  // 而且几乎没下多少，就自动换一条线
 var FAST_SWITCH_MS = 5500;   // 一上来就慢得离谱（几十 KB/s）：先给 5.5 秒，不行立刻换线
 var MAX_ROUTE_TRIES = 6;     // 单个任务最多自动换 6 次线路，别在 20 条死线里无限绕
 var ROUTE_GOOD_BPS = 96 * 1024;   // 实测 ≥96KB/s 才算「快的线路」，低于它的要排到「测不出速度」的后面
+/* 分片下载换线不需要重来：剩余区间换条线路接着要，已下的字节一个不丢。
+ * 所以给它比单连接宽松得多的时间和次数 —— 从 0 下到 90% 发现被限速也能救回来。 */
+var SEG_ROTATE_MS = 6500;    // 连续 6.5 秒低于阈值就换一条线路
+var MAX_SEG_ROTATIONS = 12;  // 整个任务最多换 12 次，够把池子轮两轮
+/* 「不算慢，但也没跑起来」：低于 480KB/s 就主动去试一条测速明显更快的线路。
+ * 用户的感受是「能跑 1MB/s 的线路，现在只用 200KB/s」—— 光靠 40KB/s 的慢阈值永远发现不了。 */
+var SEG_TRY_BPS = 480 * 1024;
+var SEG_TRY_MS = 8000;
 
 /* 事件回调里用缓存，避免每次 onChanged 都读一遍 storage */
 async function settingsNow() {
@@ -286,6 +295,23 @@ function noteRoute(prefix, ok, bps) {
     statsDirty = true;
     setTimeout(saveStats, 1500);
   });
+}
+
+/* 最近一次测速结果：prefix -> 实测速度（只取成功的） */
+function probeBps() {
+  var m = {};
+  var list = (probeCache && probeCache.list) || [];
+  list.forEach(function (r) { if (r && r.ok) m[r.prefix] = r.bps || 0; });
+  return m;
+}
+
+/* 慢 ≠ 坏。
+ * 下载慢自动换线是对的，但别把它记成「失败」：以前换一次线就 badUntil 3 分钟 + noteRoute(false)，
+ * 连续换两次这条线路直接被锁 5-10 分钟。用一阵子之后 20 条线路里只剩 5 条「可测速」，
+ * 能挑的池子越用越小，速度自然越来越差。这里只做「暂时排后面」，不动历史成功率。 */
+function demoteRoute(prefix, ms) {
+  if (prefix === undefined || prefix === null) return;
+  slowUntil.set(prefix, Date.now() + (ms || 90 * 1000));
 }
 
 var lastSiteSig = '';
@@ -674,18 +700,53 @@ async function reachableNoCors(url, timeoutMs) {
   }
 }
 
+/* 试拉一小段估速度。
+ *
+ * 两个关键点，都是被「早上很快、用一阵就慢」教出来的：
+ * 1) 到点还没读完不判「超时」，直接按已经拿到的字节算速度。
+ *    以前慢线路（比如 30KB/s）在 5.5 秒里读不完 96KB，会被记成「测不出速度」，
+ *    排到「跨域受限」那一档后面，于是永远轮不到它 —— 可它其实能下。
+ * 2) 速度取「最后一段」的窗口值，而不是整段平均。
+ *    镜像典型行为是首包爆发几 MB/s、随后限速到几十 KB/s，整段平均会把这段限速抹平，
+ *    于是每次都挑中那条被限速的线路。 */
 async function probeOne(route, fileUrl, timeoutMs) {
+  var limit = timeoutMs || MIRROR_TIMEOUT_MS;
   var ctrl = new AbortController();
-  var timer = setTimeout(function () { ctrl.abort(); }, timeoutMs || MIRROR_TIMEOUT_MS);
+  var timer = setTimeout(function () { ctrl.abort(); }, limit);
   var t0 = performance.now();
+  var got = 0;
+  var ttfb = 0;
+  var status = 0;
+  var samples = [];             // {t, b} 最近若干次读取，用来算尾窗速度
+  var reader = null;
+
+  function measure(endAt) {
+    if (!got) return 0;
+    var dur = Math.max(0.05, (endAt - t0) / 1000);
+    var bps = got / dur;
+    if (got < PROBE_BYTES && samples.length > 1) {
+      // 没读满：说明还在限速中，取最后 1.2 秒的窗口速度
+      for (var i = samples.length - 1; i >= 0; i--) {
+        var span = (endAt - samples[i].t) / 1000;
+        if (span >= 0.6) {
+          var w = (got - samples[i].b) / span;
+          if (w > 0) bps = Math.min(bps, w);   // 尾窗更慢就以尾窗为准
+          break;
+        }
+      }
+    }
+    return Math.round(bps);
+  }
+
   try {
     var res = await fetch(routeUrl(route, fileUrl), {
-      headers: { Range: 'bytes=0-' + (PROBE_BYTES - 1) },
+      headers: { Range: 'bytes=0-' + (PROBE_BYTES - 1), Accept: 'application/octet-stream' },
       cache: 'no-store',
       redirect: 'follow',
       signal: ctrl.signal
     });
-    var ttfb = performance.now() - t0;
+    ttfb = performance.now() - t0;
+    status = res.status;
     if (res.status !== 200 && res.status !== 206) {
       try { res.body && res.body.cancel(); } catch (e) {}
       return { ok: false, code: res.status, ms: Math.round(ttfb) };
@@ -695,13 +756,35 @@ async function probeOne(route, fileUrl, timeoutMs) {
       try { res.body && res.body.cancel(); } catch (e) {}
       return { ok: false, code: 'html', ms: Math.round(ttfb) };
     }
-    var buf = await res.arrayBuffer();
-    var dt = Math.max(0.05, (performance.now() - t0) / 1000);
-    return { ok: true, code: res.status, bytes: buf.byteLength, ms: Math.round(ttfb), bps: Math.round(buf.byteLength / dt) };
+    if (!res.body || !res.body.getReader) {
+      var buf = await res.arrayBuffer();
+      got = buf.byteLength;
+      return { ok: got > 0, code: res.status, bytes: got, ms: Math.round(ttfb), bps: measure(performance.now()) };
+    }
+    reader = res.body.getReader();
+    while (got < PROBE_BYTES) {
+      var r = await reader.read();
+      if (r.done) break;
+      got += r.value.byteLength;
+      samples.push({ t: performance.now(), b: got });
+      if (samples.length > 24) samples.shift();
+    }
+    try { await reader.cancel(); } catch (e) {}
+    return {
+      ok: got > 0, code: status, bytes: got, ms: Math.round(ttfb),
+      bps: measure(performance.now()), partial: got < PROBE_BYTES
+    };
   } catch (e) {
+    // 超时被 abort：已经读到的字节照样能算速度，比一律记「超时」有用得多
+    if (got > 0) {
+      return {
+        ok: true, code: status, bytes: got, ms: Math.round(ttfb || limit),
+        bps: measure(performance.now()), partial: true, note: (e && e.name) || 'stop'
+      };
+    }
     var nm = (e && e.name) || '';
-    // AbortError = 超时；TypeError = 可能是跨域被拦，也可能压根连不上，再确认一次
     if (nm === 'AbortError') return { ok: false, err: 'timeout', ms: Math.round(performance.now() - t0) };
+    // TypeError：可能是跨域被拦，也可能压根连不上，再确认一次
     var reach = await reachableNoCors(routeUrl(route, fileUrl), 2500);
     return { ok: false, err: reach ? 'cors' : 'dead', ms: Math.round(performance.now() - t0) };
   } finally {
@@ -793,9 +876,14 @@ async function routesForFile(url, settings) {
   });
   var order = decorated.map(function (r) { return { name: r.name, prefix: r.prefix }; });
   var now = Date.now();
-  var fresh = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) < now; });
+  var fresh = order.filter(function (r) {
+    return (badUntil.get(r.prefix) || 0) < now && (slowUntil.get(r.prefix) || 0) < now;
+  });
+  var soft = order.filter(function (r) {
+    return (badUntil.get(r.prefix) || 0) < now && (slowUntil.get(r.prefix) || 0) >= now;
+  });
   var cooling = order.filter(function (r) { return (badUntil.get(r.prefix) || 0) >= now; });
-  var list = fresh.concat(cooling);   // 冷却中的排最后，全都在冷却时也还能兜底
+  var list = fresh.concat(soft, cooling);   // 真失败的排最后；「刚才慢」的排在中后，都还能兜底
   // 手动指定的线路优先（'@direct' 代表直连）
   var want = prefPrefix(settings && settings.preferRoute);
   if (want !== null) {
@@ -961,6 +1049,11 @@ function maybeBoost(task) {
   setTimeout(function () { task.boosting = false; }, 1800);
   if (task.segmented) {
     segSend({ type: 'seg-boost', id: task.id });
+    /* 同一地址重连两次还没起色，说明不是「连接走霉运」，而是这条线路被限速了 ——
+     * 这时候原地重连多少次都一样，换线路才有用。 */
+    if ((task.boostCount || 0) >= 2 && (task.routeRotations || 0) < MAX_SEG_ROTATIONS) {
+      rotateSeg(task, null);
+    }
   } else if (task.downloadId) {
     try {
       callExt(EXT.downloads.pause, EXT.downloads, [task.downloadId], function () {
@@ -980,14 +1073,54 @@ function judgeSlow(task) {
   var th = Math.max(5, s.lowSpeedKB || 40) * 1024;
   var total = task.total || task.size || 0;
   var now = Date.now();
-  if (!task.speed || task.speed > th * 1.6 || (total && task.received > total * 0.92)) {
+  var nearEnd = total && task.received > total * 0.92;
+  /* 分片任务多一条判据：掉到本次峰值的 35% 以下也算「变慢」。
+   * 用户感受就是「刚才还有 800KB/s，现在只剩 100KB/s」——
+   * 只看 40KB/s 这个绝对阈值的话，这种情况永远不会触发换线。
+   * 峰值要超过 128KB/s 才算数，免得一上来就是慢线时反复比来比去。 */
+  var dip = !!task.segmented && (task.bestSpeed || 0) > 128 * 1024 &&
+    task.speed > 0 && task.speed < task.bestSpeed * 0.35;
+  var absSlow = task.speed > 0 && task.speed <= th * 1.6;
+  // 分片任务：没到「慢」但也没跑起来（<480KB/s），同样值得试一条更快的线路
+  var mediocre = !!task.segmented && task.speed > 0 && task.speed < SEG_TRY_BPS;
+  if (!task.speed || nearEnd || (!absSlow && !dip && !mediocre)) {
     task.slowSince = 0;
     task.slow = false;
     return;
   }
   if (!task.slowSince) { task.slowSince = now; return; }
   var spent = now - task.slowSince;
-  if (spent >= SLOW_JUDGE_MS) task.slow = true;
+  // 「速度慢」这个角标只在真的慢（或比峰值掉太多）时亮，200~400KB/s 不算
+  if (spent >= SLOW_JUDGE_MS && (absSlow || dip)) task.slow = true;
+
+  /* 分片任务：不重来，把剩余区间换到下一条线路。
+   * 这是「用一阵就慢」的主要解法 —— 镜像被限速后，换条线路往往立刻回到几百 KB/s，
+   * 而已经下好的部分一个字节都不浪费。 */
+  if (task.segmented) {
+    if ((task.routeRotations || 0) >= MAX_SEG_ROTATIONS) return;
+    if ((absSlow || dip) && spent >= SEG_ROTATE_MS) {
+      var prev = task.routePrefix;
+      if (rotateSeg(task, null)) {
+        demoteRoute(prev, 90 * 1000);   // 慢就暂时排后面，但不算「坏」
+        task.slowSince = 0;
+        task.slow = false;
+        return;
+      }
+    }
+    /* 速度「不算慢，但也没跑起来」（200KB/s 这种）：主动去试一条测速明显更快的线路。
+     * 换线不丢字节，试错成本就是几百毫秒的重连；试遍都不行就回到实测最快的那条。 */
+    if (spent >= SEG_TRY_MS && task.speed > 0 && task.speed < SEG_TRY_BPS) {
+      if (rotateSeg(task, undefined, { untriedOnly: true, minBps: Math.round(task.speed * 1.4) })) {
+        task.slowSince = 0;
+        return;
+      }
+      var best = task.segBest;
+      if (best && best.prefix !== task.routePrefix && (best.bps || 0) > task.speed * 1.3) {
+        if (rotateSeg(task, best.prefix)) { task.slowSince = 0; return; }
+      }
+    }
+    return;
+  }
 
   // 换线次数有上限；已经下了不少也不换（换线等于把这部分白扔）
   if ((task.routeTries || 0) >= MAX_ROUTE_TRIES) return;
@@ -1012,6 +1145,22 @@ async function switchRoute(task, prefix, auto) {
 
 async function doSwitchRoute(task, prefix, auto) {
   if (!task) return false;
+
+  /* 分片任务：换线不用把文件重下。
+   * 直接让 off.js 把剩余区间换到下一条线路，已下的 chunks 全部保留。
+   * 手点「换线路」也走这条路 —— 下到一半换线不再从头开始。 */
+  if (task.segmented) {
+    var prevPrefix = task.routePrefix;
+    if (rotateSeg(task, prefix === undefined ? null : prefix)) {
+      if (auto) {
+        task.routeTries = (task.routeTries || 0) + 1;
+        demoteRoute(prevPrefix, 90 * 1000);
+      }
+      updateBadge();
+      return true;
+    }
+  }
+
   var settings = await settingsNow();
   var order = await routesForFile(task.url, settings);
   if (!order.length) return false;
@@ -1035,11 +1184,11 @@ async function doSwitchRoute(task, prefix, auto) {
     if (idx < 0) idx = start % order.length;      // 兜底：全试过了就从下一条重来
   }
 
-  // 自动换线说明这条线路实际表现不行：扣分 + 冷却，下次别再排它第一
+  /* 自动换线说明这条线路这一轮不适合作业，但它没坏：只做临时降权（90 秒内排到后面），
+   * 不再记「失败」+ 锁 3 分钟。慢和坏是两回事，混在一起就会把能用的线路越锁越少。 */
   if (auto && task.routePrefix !== undefined) {
     task.routeTries = (task.routeTries || 0) + 1;
-    noteRoute(task.routePrefix, false, 0);
-    badUntil.set(task.routePrefix, Date.now() + 3 * 60 * 1000);
+    demoteRoute(task.routePrefix, 90 * 1000);
   }
 
   var dlId = task.downloadId;
@@ -1157,6 +1306,7 @@ async function resumeTask(task) {
     task.slow = false;
     task.slowSince = 0;
     task._sp = null;
+    task._lastByteAt = Date.now();   // 暂停期间不算「卡住」，继续后重新计时
     segSend({ type: 'seg-resume', id: task.id });
     persist(); updateBadge();
     return { ok: true };
@@ -1243,6 +1393,9 @@ async function startSegmented(task, route, settings, order) {
     task.boostCount = 0;
     task.slow = false;
     task._sp = null;
+    task.routeRotations = 0;
+    task._lastByteAt = Date.now();
+    task._lastRecv = 0;
     segTasks.set(task.id, task);
     // 每片换一条线路：同一时刻问不同的镜像要数据，比在一条慢线路上挤快得多
     var urls = [];
@@ -1250,13 +1403,27 @@ async function startSegmented(task, route, settings, order) {
       .concat((order || []).filter(function (r) { return r.prefix !== route.prefix; }));
     pool.forEach(function (r) { urls.push(routeUrl(r, task.url)); });
     if (!urls.length) urls = [routeUrl(route, task.url)];
+    /* 换线时的候选池：download 中途要能把「剩余区间」整体挪到下一条线路，
+     * 所以这里连名字和地址一起留给后台用（off.js 那边只有地址，报不出线路名）。 */
+    var segPool = pool.slice(0, 6).map(function (r) {
+      return { name: r.name, prefix: r.prefix, url: routeUrl(r, task.url) };
+    });
+    if (!segPool.length) segPool = [{ name: route.name, prefix: route.prefix, url: routeUrl(route, task.url) }];
+    task.segPool = segPool;
+    task.segTried = [route.prefix];
+    task.segBest = null;
+    /* 连接数：Chrome 同一个域名最多 6 条连接，再多也是排队，所以 6 就是上限。
+     * 大文件一律拉满 6 条 —— 镜像按「每条连接」限速时，4 条就是比 6 条慢一半。 */
+    var threads = Math.max(2, Math.min(6, settings.threads || 4));
+    var mb = (task.size || task.total || 0) / 1048576;
+    if (mb >= 3) threads = 6;
     segSend({
       type: 'seg-start',
       id: task.id,
       url: urls[0],
       urls: urls.slice(0, 6),
       size: task.size || 0,
-      threads: Math.max(2, Math.min(6, settings.threads || 4))
+      threads: threads
     });
     persist();
     return true;
@@ -1264,6 +1431,75 @@ async function startSegmented(task, route, settings, order) {
     task.segmented = false;
     return false;
   }
+}
+
+/* 分片换线（保留已下字节）
+ * 以前换线 = abortSeg + 重新 startSegmented，已经下好的几 MB 全扔，
+ * 所以只敢在下到 8% 之前换。现在只让 off.js 把「剩余区间」换到下一条线路，
+ * chunks 一个不丢，下到 90% 发现被限速也救得回来。 */
+function pickSegNext(task, targetPrefix, opt) {
+  var pool = (task && task.segPool) || [];
+  if (!pool.length) return null;
+  var now = Date.now();
+  if (targetPrefix !== undefined && targetPrefix !== null) {
+    for (var i = 0; i < pool.length; i++) if (pool[i].prefix === targetPrefix) return pool[i];
+  }
+  if (pool.length < 2) return null;
+  var cur = -1;
+  for (var j = 0; j < pool.length; j++) if (pool[j].prefix === task.routePrefix) { cur = j; break; }
+  var cands = [];
+  for (var k = 1; k <= pool.length; k++) {
+    var c = pool[(cur + k + pool.length) % pool.length];
+    if (c.prefix === task.routePrefix) continue;
+    cands.push(c);
+  }
+  if (!cands.length) return null;
+  if (opt && opt.untriedOnly) {
+    var tried = task.segTried || [];
+    cands = cands.filter(function (c) { return tried.indexOf(c.prefix) < 0; });
+    if (!cands.length) return null;
+  }
+  if (opt && opt.minBps) {
+    // 只试「测速明显更快」的：没有就不折腾，免得在几条慢线之间来回跳
+    var pm = probeBps();
+    var better = cands.filter(function (c) { return (pm[c.prefix] || 0) >= opt.minBps; });
+    if (!better.length) return null;
+    cands = better;
+    cands.sort(function (a, b) { return (pm[b.prefix] || 0) - (pm[a.prefix] || 0); });
+    return cands[0];
+  }
+  // 优先没被临时降权的；都被降权了就按池子顺序轮（总比死守一条强）
+  var fresh = cands.filter(function (c) {
+    return (badUntil.get(c.prefix) || 0) < now && (slowUntil.get(c.prefix) || 0) < now;
+  });
+  return fresh[0] || cands[0];
+}
+
+function rotateSeg(task, targetPrefix, opt) {
+  if (!task || !task.segmented) return false;
+  var prevPrefix = task.routePrefix;
+  var next = pickSegNext(task, targetPrefix, opt);
+  if (!next) return false;
+  // 换线前记下这条线路跑出来的峰值：全部试过之后要能挑回最快的那条
+  var prevBps = task.bestSpeed || task.speed || 0;
+  if (prevPrefix !== undefined && prevBps > ((task.segBest && task.segBest.bps) || 0)) {
+    task.segBest = { prefix: prevPrefix, bps: prevBps };
+  }
+  if (prevPrefix !== undefined) {
+    task.segTried = task.segTried || [];
+    if (task.segTried.indexOf(prevPrefix) < 0) task.segTried.push(prevPrefix);
+  }
+  segSend({ type: 'seg-rotate', id: task.id, toUrl: next.url });
+  task.routePrefix = next.prefix;
+  task.route = next.name + (next.prefix ? '' : '（直连）');
+  task.routeRotations = (task.routeRotations || 0) + 1;
+  task.slow = false;
+  task.slowSince = 0;
+  task._sp = null;
+  task.boostCount = 0;
+  task.bestSpeed = 0;   // 峰值按新线路重新算，别拿上一条的峰值说它「掉速」
+  persist();
+  return true;
 }
 
 function segSend(payload) {
@@ -1283,6 +1519,10 @@ function revokeBlob(url) {
 function onSegProgress(m) {
   var task = segTasks.get(m.id);
   if (!task) return;
+  if ((m.received || 0) > (task._lastRecv || 0)) {
+    task._lastRecv = m.received;
+    task._lastByteAt = Date.now();
+  }
   task.received = m.received || 0;
   if (m.total) { task.total = m.total; if (!task.size) task.size = m.total; }
   if (typeof m.speed === 'number' && m.speed > 0) {
@@ -1322,6 +1562,22 @@ async function onSegDone(m) {
     pump();
   }
 }
+
+/* 卡死看门狗：分片下载 5 秒没进一个字节就换线路。
+ * 光靠「速度低」是发现不了的 —— 速度事件本身就是「有字节进来」才有的，
+ * 真卡住的时候一条消息都没有，judgeSlow 根本不会被调用。 */
+var SEG_STALL_MS = 5000;
+setInterval(function () {
+  var now = Date.now();
+  segTasks.forEach(function (task) {
+    if (!task || task.status !== 'downloading' || !task.segmented) return;
+    if (!task._lastByteAt) { task._lastByteAt = now; return; }
+    if (now - task._lastByteAt < SEG_STALL_MS) return;
+    if ((task.routeRotations || 0) >= MAX_SEG_ROTATIONS) return;
+    task._lastByteAt = now;      // 先重置，换线不成功也别每 2 秒触发一次
+    rotateSeg(task, null);
+  });
+}, 2000);
 
 function onSegError(m) {
   var task = segTasks.get(m.id);
@@ -1721,6 +1977,7 @@ onMessage(function (msg, sender, respond) {
                 score: Math.round(routeScore(stats0, r.prefix)),
                 cooling: (badUntil.get(r.prefix) || 0) > now0,
                 coolUntil: badUntil.get(r.prefix) || 0,
+                slowUntil: slowUntil.get(r.prefix) || 0,
               };
             }),
             pool: POOL_INFO,
@@ -1800,6 +2057,7 @@ onMessage(function (msg, sender, respond) {
                 total: t.total, status: t.status, route: t.route, error: t.error,
                 speed: t.speed || 0, slow: !!t.slow, segmented: !!t.segmented,
                 boosting: !!t.boosting, boostCount: t.boostCount || 0,
+                routeRotations: t.routeRotations || 0,
                 paused: t.status === 'paused',
                 routePrefix: t.routePrefix || ''
               };

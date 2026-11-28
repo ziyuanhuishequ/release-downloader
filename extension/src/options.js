@@ -176,6 +176,11 @@
       var left = Math.ceil(((until || 0) - Date.now()) / 60000);
       return left > 0 ? '冷却 ' + left + ' 分' : '冷却中';
     }
+    /* 「慢」只是这一轮排到后面，不是坏了，别让它看起来像被限流 */
+    function slowTxt(until) {
+      var left = Math.ceil(((until || 0) - Date.now()) / 60000);
+      return left > 0 ? '慢 ' + left + ' 分' : '刚慢过';
+    }
     var rows = poolState.routes.map(function (r) {
       var pb = pmap[r.prefix];
       var txt;
@@ -194,10 +199,11 @@
       var star = poolState.prefer === prefKey(r.prefix);
       var okN = r.ok || 0;
       var failN = r.fail || 0;
+      var slow = !r.cooling && (r.slowUntil || 0) > Date.now();
       return '<div class="rline ' + cls + (star ? ' pref' : '') + '" data-prefix="' + esc(prefKey(r.prefix)) + '">' +
         '<span class="rn">' + (star ? '★ ' : '') + esc(r.name || '直连') + '</span>' +
         '<span class="bar2"><i style="width:' + w + '%"></i></span>' +
-        '<span class="rs">' + esc(r.cooling ? coolTxt(r.coolUntil) : txt) + '</span>' +
+        '<span class="rs">' + esc(r.cooling ? coolTxt(r.coolUntil) : (slow ? slowTxt(r.slowUntil) : txt)) + '</span>' +
         '<span class="rk">' + (okN || failN ? okN + '成/' + failN + '败' : '—') + '</span>' +
         '</div>';
     }).join('') || '<div class="rline"><span class="rn">线路池是空的，点「更新线路池」重新拉一次</span></div>';

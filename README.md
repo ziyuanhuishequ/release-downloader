@@ -11,7 +11,7 @@
 > `github.com` 的仓库页、Releases、Issues、代码树都能正常打开。
 >
 > **② 下载不经过镜像，所以快。** 页面浏览走镜像，**下载请求一律走「20 条加速线路池 + 多线程分片」**，
-> 线路一慢 5.5 秒就自动换下一条。速度最快测出过50M/S
+> 线路一慢 5.5 秒就自动换下一条。同一个文件实测从 **30 KB/s 提升到 200–300 KB/s**，大文件差距更明显。
 >
 > 不用装 exe，解压加载即可用 → [下载扩展](#下载)
 
@@ -27,12 +27,12 @@
 | --- | --- |
 | Windows（推荐，免安装） | [`GitHub-Release-Downloader-Desktop-v1.6.9.exe`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.9/GitHub-Release-Downloader-Desktop-v1.6.9.exe) |
 | macOS（Intel + Apple 芯片通用） | [`GitHub-Release-Downloader-macOS-v1.6.9-universal.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/v1.6.9/GitHub-Release-Downloader-macOS-v1.6.9-universal.zip) |
-| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip) |
-| Firefox | [`GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.7/GitHub-Release-Downloader-Ext-v1.4.7-firefox.zip) |
+| Chrome / Edge / Brave / 360 / QQ | [`GitHub-Release-Downloader-Ext-v1.4.8-chrome.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.8/GitHub-Release-Downloader-Ext-v1.4.8-chrome.zip) |
+| Firefox | [`GitHub-Release-Downloader-Ext-v1.4.8-firefox.zip`](https://github.com/ziyuanhuishequ/release-downloader/releases/download/ext-v1.4.8/GitHub-Release-Downloader-Ext-v1.4.8-firefox.zip) |
 
 桌面版在 [v1.6.9](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/v1.6.9)（同一个 Release 里还有
 `GitHub-Release-Downloader-Source-v1.6.9.zip` Rust 源码）；浏览器扩展在
-[ext-v1.4.7](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.7)，
+[ext-v1.4.8](https://github.com/ziyuanhuishequ/release-downloader/releases/tag/ext-v1.4.8)，
 每个历史版本都单独发一个 Release，方便回退。
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
@@ -142,7 +142,7 @@ Pre-release 过滤、Token 获取方式等细节，界面上把鼠标停在对�
 | --- | --- |
 | ![扩展弹窗](extension/screenshots/popup.png) | ![注入面板](extension/screenshots/content.png) |
 
-安装：下载 `GitHub-Release-Downloader-Ext-v1.4.7-chrome.zip` → 解压到固定目录 →
+安装：下载 `GitHub-Release-Downloader-Ext-v1.4.8-chrome.zip` → 解压到固定目录 →
 打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选该目录。
 
 扩展 v1.3.0 起支持多线程分片（同一条最快线路上并发）、实时速度与剩余时间、
