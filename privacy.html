@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 · GitHub Release 下载助手</title>
+<meta name="description" content="GitHub Release 下载助手（浏览器扩展与桌面版）的隐私政策：不收集、不上传任何个人数据。">
+<link rel="icon" href="assets/favicon.png">
+<style>
+  :root{
+    --ink:#1A1E30; --cream:#FFFDF6; --sun:#FFF3DC; --coral:#FF6A3D;
+    --mint:#2ED3A5; --text2:#5B5F70;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--sun);
+    background-image:linear-gradient(rgba(26,30,48,.045) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(26,30,48,.045) 1px,transparent 1px);
+    background-size:32px 32px;
+    color:var(--ink);
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    line-height:1.75;font-size:16px;padding:48px 20px 80px;
+  }
+  .wrap{max-width:820px;margin:0 auto}
+  .card{background:var(--cream);border:3px solid var(--ink);box-shadow:8px 8px 0 var(--ink);padding:36px 32px}
+  h1{font-size:30px;letter-spacing:.5px;line-height:1.3}
+  .sub{color:var(--text2);font-size:14px;margin-top:10px}
+  h2{font-size:20px;margin:30px 0 10px;padding-left:12px;border-left:6px solid var(--coral)}
+  p,li{color:#2A2F45}
+  ul{margin:8px 0 8px 22px}
+  li{margin:5px 0}
+  code{background:var(--sun);border:1px solid #E0D5BE;padding:1px 6px;font-family:ui-monospace,Consolas,monospace;font-size:14px}
+  .ok{display:inline-block;background:var(--mint);border:2px solid var(--ink);padding:2px 10px;font-weight:700;font-size:14px;margin-bottom:6px}
+  a{color:#782814}
+  .foot{margin-top:28px;font-size:14px;color:var(--text2)}
+  .back{display:inline-block;margin-top:24px;background:var(--coral);color:#fff;border:3px solid var(--ink);
+        box-shadow:4px 4px 0 var(--ink);padding:8px 18px;font-weight:800;text-decoration:none}
+  .back:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>隐私政策</h1>
+    <div class="sub">GitHub Release 下载助手 · 浏览器扩展 v1.4.7 与桌面版 v1.6.9 · 最后更新：2026-11-28</div>
+
+    <p style="margin-top:22px"><span class="ok">一句话</span><br>
+      这个工具<b>不收集、不上传、不出售</b>你的任何数据。所有下载、测速、归档都在你自己的电脑和浏览器里完成，
+      不需要注册账号，也没有统计代码。</p>
+
+    <h2>1. 我们不收集什么</h2>
+    <ul>
+      <li>不收集姓名、邮箱、手机号等身份信息；</li>
+      <li>不收集浏览历史、下载记录、IP 地址；</li>
+      <li>不植入统计 / 广告 / 埋点 SDK；</li>
+      <li>不读取、不上传你的下载文件内容。</li>
+    </ul>
+
+    <h2>2. 保存在你本地的数据</h2>
+    <ul>
+      <li><b>设置</b>（并发数、线程数、线路偏好、是否归档、可选的 GitHub Token）——存在浏览器的
+        <code>storage.local</code>（扩展版）或程序同目录的配置文件（桌面版），只有本机能读。</li>
+      <li><b>下载记录</b>（哪些文件下过、大小、时间）——用来在列表里显示「已下载」角标，可在设置页一键清除。</li>
+      <li><b>线路测速结果</b>（每条加速线路的速度、成功率、冷却时间）——用于下次优先选快的线路。</li>
+    </ul>
+    <p>以上数据都不会离开你的设备。卸载扩展或删除程序目录即全部消失。</p>
+
+    <h2>3. 会访问哪些网络地址</h2>
+    <ul>
+      <li><code>api.github.com</code>：读取 Release 的资源列表（文件名、大小、下载地址）。匿名访问受 GitHub 限流，
+        可在设置里填自己的 Token 提额，Token 只存在本地。</li>
+      <li><code>github.com</code> / <code>codeload.github.com</code> / <code>objects.githubusercontent.com</code>：
+        下载文件本身。</li>
+      <li>若干公开的 GitHub 加速镜像域名（如 gh-proxy.org、ghproxy.net 等）：下载前并发测速，选最快的一条；
+        只有你勾选下载时才会访问。</li>
+      <li><code>raw.githubusercontent.com</code>：读取一份「线路池」JSON（纯 URL 列表），用于增删镜像，
+        不含任何可执行代码。</li>
+    </ul>
+    <p>这些请求只带必要的 HTTP 头，不携带你的任何身份信息；镜像服务方可能按其自身政策记录访问日志，这点我们无法控制。</p>
+
+    <h2>4. 「GitHub 国内访问」开关</h2>
+    <p>这是可选功能，默认关闭。打开后，扩展用 <code>declarativeNetRequest</code> 把
+      <code>github.com</code> 的<b>网页浏览</b>请求重定向到你选中的镜像站点，让你在没有代理的情况下也能看仓库页。
+      它不代理下载流量、不修改页面内容、不接管登录状态；登录 / 设置类页面不会被重定向。</p>
+
+    <h2>5. 桌面版（Windows / macOS）</h2>
+    <p>桌面版是单文件程序，不写注册表、不装服务、不联网上报。缓存与配置放在程序同目录或系统缓存目录
+      （macOS 为 <code>~/Library/Caches/GitHubReleaseDownloader/</code>），删除即清除。
+      检查更新时只会向 GitHub 查询一次最新版本号。</p>
+
+    <h2>6. 第三方</h2>
+    <p>本工具不使用任何第三方分析、广告或数据服务。GitHub 与各加速镜像的隐私实践适用其各自的政策。</p>
+
+    <h2>7. 儿童隐私</h2>
+    <p>本工具不是面向儿童的产品，也不会有意收集儿童信息（事实上不收集任何人的信息）。</p>
+
+    <h2>8. 政策变更</h2>
+    <p>如果未来功能变化导致数据处理方式改变，会先更新本页面并修改上面的「最后更新」日期；
+      涉及收集数据的功能一定默认关闭并单独征得同意。</p>
+
+    <h2>9. 联系方式</h2>
+    <p>问题、建议或数据相关请求，请到项目仓库提 Issue：
+      <a href="https://github.com/ziyuanhuishequ/release-downloader/issues">github.com/ziyuanhuishequ/release-downloader/issues</a></p>
+
+    <a class="back" href="./">← 回到首页</a>
+    <div class="foot">本页可被 Chrome 应用商店 / Edge 加载项 / Firefox AMO 作为隐私政策链接引用。</div>
+  </div>
+</div>
+</body>
+</html>
