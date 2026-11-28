@@ -47,8 +47,6 @@ python tools/update_ext.py --firefox       # 装的是 Firefox 版
 ```
 
 跑完到 `chrome://extensions` 点一下扩展卡片上的刷新按钮（↻）即可。
-想彻底免维护只能上架应用商店（国内访问不了 Chrome 店，所以离线包仍是主力），
-上架资料见 [`store/上架说明.md`](store/上架说明.md)。
 
 **装 macOS 版**：解压 zip 得到 `GitHubReleaseDownloader.app`，拖进「应用程序」文件夹即可，不用装任何运行时
 （包内是 arm64 + x86_64 的通用二进制，Intel 与 Apple 芯片都能跑）。
