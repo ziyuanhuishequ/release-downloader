@@ -16,7 +16,7 @@ var EXT = (IS_FF && typeof browser !== 'undefined' && browser && browser.runtime
 
 var APP_INFO = {
   name: 'GitHub Release 下载助手',
-  version: '1.4.8',
+  version: '1.5.1',
   repo: 'https://github.com/ziyuanhuishequ/release-downloader'
 };
 
@@ -87,7 +87,7 @@ var DEFAULT_SETTINGS = {
   preferWindows: false,    // 默认只勾选 Windows 资源
   segEnabled: true,        // 分片并发下载（多线程）
   threads: 4,              // 每个文件切几片
-  segMaxMB: 128,           // 超过这个大小改走浏览器单连接（拼装要占内存）
+  segMaxMB: 512,           // 超过这个大小改走浏览器单连接（拼装在内存里做，太大怕撑爆）
   lowSpeedKB: 40,          // 低于这个速度算「慢」，用来提示换线路
   preferRoute: '',         // 手动固定使用的线路前缀（空 = 自动挑）
   ghBoost: false,          // GitHub 国内访问总开关

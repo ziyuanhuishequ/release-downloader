@@ -229,7 +229,16 @@
         if (t.status === 'paused') tag = '<span class="tflag pause">已暂停</span>';
         else if (t.slow && t.status === 'downloading') tag = '<span class="tflag bad">速度慢</span>';
         else if (t.boosting) tag = '<span class="tflag ok">提速</span>';
-        else if (t.segmented && t.status === 'downloading') tag = '<span class="tflag">多线程</span>';
+        else if (t.segmented && t.status === 'downloading') {
+          tag = '<span class="tflag">' + ((t.segLanes || 0) >= 2 ? t.segLanes + ' 线并发' : '多线程') + '</span>';
+        }
+
+        var laneTip = '';
+        if (t.segLaneInfo && t.segLaneInfo.length) {
+          laneTip = t.segLaneInfo.map(function (x) {
+            return x.name + '  ' + (x.bps ? fmtSpeed(x.bps) : '待测');
+          }).join('\n');
+        }
 
         var acts = '';
         if (t.status === 'paused') {
@@ -245,8 +254,10 @@
         html += '<div class="task' + (t.status === 'paused' ? ' is-pause' : '') + '">' +
           '<div class="tn"><span class="tname">' + esc(t.name) + '</span>' +
           (t.route
-            ? '<span class="trt"' + (t.routeRotations ? ' title="已自动换线 ' + t.routeRotations + ' 次"' : '') + '>' +
-              esc(t.route) + (t.routeRotations ? ' ↻' + t.routeRotations : '') + '</span>'
+            ? '<span class="trt" title="' +
+              esc(laneTip || (t.routeRotations ? '已自动切到更快的线路 ' + t.routeRotations + ' 次' : t.route)) + '">' +
+              esc(t.route) + (t.segLanes > 1 ? ' +' + (t.segLanes - 1) : '') +
+              (t.routeRotations ? ' ↻' + t.routeRotations : '') + '</span>'
             : '') + tag + '</div>' +
           '<div class="tb"><div class="bar' + (t.status === 'paused' ? ' pause' : '') +
             '"><i style="width:' + pct + '%"></i></div>' +

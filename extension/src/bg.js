@@ -1081,8 +1081,12 @@ function judgeSlow(task) {
   var dip = !!task.segmented && (task.bestSpeed || 0) > 128 * 1024 &&
     task.speed > 0 && task.speed < task.bestSpeed * 0.35;
   var absSlow = task.speed > 0 && task.speed <= th * 1.6;
-  // 分片任务：没到「慢」但也没跑起来（<480KB/s），同样值得试一条更快的线路
-  var mediocre = !!task.segmented && task.speed > 0 && task.speed < SEG_TRY_BPS;
+  /* 「不算慢，但也没跑起来」（<480KB/s）值得去试更快的线路。
+   * 但现在多线路并发时，这个速度已经是几条线加起来的总吞吐，
+   * 片级调度每秒都在把慢片挪走 —— 整池重建反而会把已经热起来的连接全打断。
+   * 所以只在「只剩一条线」时才用这条判据。 */
+  var multiLane = (task.segLanes || 0) >= 2;
+  var mediocre = !!task.segmented && !multiLane && task.speed > 0 && task.speed < SEG_TRY_BPS;
   if (!task.speed || nearEnd || (!absSlow && !dip && !mediocre)) {
     task.slowSince = 0;
     task.slow = false;
@@ -1107,16 +1111,12 @@ function judgeSlow(task) {
         return;
       }
     }
-    /* 速度「不算慢，但也没跑起来」（200KB/s 这种）：主动去试一条测速明显更快的线路。
-     * 换线不丢字节，试错成本就是几百毫秒的重连；试遍都不行就回到实测最快的那条。 */
+    /* 速度「不算慢，但也没跑起来」（200KB/s 这种）：去看有没有实测更快的线路。
+     * 换线不丢字节，试错成本就是几百毫秒的重连；没有明显更快的就不折腾。 */
     if (spent >= SEG_TRY_MS && task.speed > 0 && task.speed < SEG_TRY_BPS) {
-      if (rotateSeg(task, undefined, { untriedOnly: true, minBps: Math.round(task.speed * 1.4) })) {
+      if (rotateSeg(task, null, { beat: Math.round(task.speed * 1.35) })) {
         task.slowSince = 0;
         return;
-      }
-      var best = task.segBest;
-      if (best && best.prefix !== task.routePrefix && (best.bps || 0) > task.speed * 1.3) {
-        if (rotateSeg(task, best.prefix)) { task.slowSince = 0; return; }
       }
     }
     return;
@@ -1382,6 +1382,54 @@ async function ensureOffscreen() {
   return await hasOffscreen();
 }
 
+/* 一次同时用几条线路。浏览器对单个域名最多 6 条连接，所以「线路数 × 每线连接」
+ * 才是真正的总并发：4 条线 × 4 连接 ≈ 16 路并发。单条线路被限速时，
+ * 只有多线路并行才能把带宽叠加起来。 */
+var LANE_POOL_MAX = 5;
+var LANE_CONC_DEFAULT = 4;
+
+/* 线路评分：优先用这条线在「本任务」里真跑出来的峰值，没跑过才退回预探测速。
+ * 换线的依据只有这一个数 —— 谁快选谁，不是按名单顺序轮着试。 */
+function segScore(task, prefix) {
+  var key = prefix === undefined || prefix === null ? '' : prefix;
+  var live = (task && task.segLive && task.segLive[key]) || 0;
+  var probe = probeBps()[key] || 0;
+  var s = Math.max(live, probe);
+  if (!s) return 0;
+  var now = Date.now();
+  /* 降权只是打折，不是拉黑：真要是实测最快，打完折照样能排前面 */
+  if ((badUntil.get(key) || 0) > now) return s * 0.1;
+  if ((slowUntil.get(key) || 0) > now) return s * 0.4;
+  return s;
+}
+
+/* 把一个线路列表变成 off.js 认识的泳道（带上实测速度，用来决定谁多分点连接） */
+function laneUrls(list, max, task) {
+  return (list || []).slice(0, max || LANE_POOL_MAX).map(function (r) {
+    return { url: r.url, name: r.name, prefix: r.prefix, bps: segScore(task, r.prefix) };
+  });
+}
+
+/* 换线时重排泳道：纯按实测速度从快到慢，取前几条一起并发。
+ * 这里不做「轮流试」——把慢线路排前面只会白占一个并发配额，
+ * 真正省时间的做法是永远让最快的几条线同时干活。 */
+function laneSetFor(task, head, max) {
+  var seen = {};
+  var out = [];
+  function take(r) {
+    if (!r) return;
+    var k = r.prefix === undefined || r.prefix === null ? '' : r.prefix;
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(r);
+  }
+  take(head);   // 手动指定的线路优先保留
+  (task.segPool || []).slice().sort(function (a, b) {
+    return segScore(task, b.prefix) - segScore(task, a.prefix);
+  }).forEach(take);
+  return laneUrls(out, max || LANE_POOL_MAX, task);
+}
+
 async function startSegmented(task, route, settings, order) {
   try {
     if (!(await ensureOffscreen())) return false;
@@ -1396,34 +1444,42 @@ async function startSegmented(task, route, settings, order) {
     task.routeRotations = 0;
     task._lastByteAt = Date.now();
     task._lastRecv = 0;
+    task.segLanes = 0;
     segTasks.set(task.id, task);
-    // 每片换一条线路：同一时刻问不同的镜像要数据，比在一条慢线路上挤快得多
-    var urls = [];
-    var pool = (order || []).filter(function (r) { return r.prefix === route.prefix; })
-      .concat((order || []).filter(function (r) { return r.prefix !== route.prefix; }));
-    pool.forEach(function (r) { urls.push(routeUrl(r, task.url)); });
-    if (!urls.length) urls = [routeUrl(route, task.url)];
-    /* 换线时的候选池：download 中途要能把「剩余区间」整体挪到下一条线路，
+    /* 线路池：主线路排最前，其余按测速结果（order 已经排好序）。
+     * 去重很重要 —— 同一条线路出现两次等于白占一个并发配额。 */
+    var seen = {};
+    var pool = [];
+    function take(r) {
+      if (!r) return;
+      var key = r.prefix === undefined || r.prefix === null ? '' : r.prefix;
+      if (seen[key]) return;
+      seen[key] = 1;
+      pool.push(r);
+    }
+    take(route);
+    (order || []).forEach(take);
+    if (!pool.length) pool = [route];
+    /* 换线/换池时的候选：download 中途要能把「剩余区间」整体挪到别的线路，
      * 所以这里连名字和地址一起留给后台用（off.js 那边只有地址，报不出线路名）。 */
-    var segPool = pool.slice(0, 6).map(function (r) {
+    task.segPool = pool.slice(0, 12).map(function (r) {
       return { name: r.name, prefix: r.prefix, url: routeUrl(r, task.url) };
     });
-    if (!segPool.length) segPool = [{ name: route.name, prefix: route.prefix, url: routeUrl(route, task.url) }];
-    task.segPool = segPool;
-    task.segTried = [route.prefix];
-    task.segBest = null;
-    /* 连接数：Chrome 同一个域名最多 6 条连接，再多也是排队，所以 6 就是上限。
-     * 大文件一律拉满 6 条 —— 镜像按「每条连接」限速时，4 条就是比 6 条慢一半。 */
-    var threads = Math.max(2, Math.min(6, settings.threads || 4));
-    var mb = (task.size || task.total || 0) / 1048576;
-    if (mb >= 3) threads = 6;
+    task.segTried = [];
+    /* 每条线路在本任务里的实测峰值（prefix -> B/s）。换线只看这个，
+     * 不再靠「没试过就排前面」轮换 —— 轮换会把刚证明很慢的线路又请回来。 */
+    task.segLive = {};
+    /* 每线连接数：Chrome 同域上限 6，设 4 留两条给页面/接口，4 条线并行就是 16 路。 */
+    task.segThreads = Math.max(2, Math.min(6, settings.threads || LANE_CONC_DEFAULT));
+    var lanes = laneUrls(task.segPool, LANE_POOL_MAX, task);
+    task.segActive = lanes.map(function (x) { return x.prefix; });
     segSend({
       type: 'seg-start',
       id: task.id,
-      url: urls[0],
-      urls: urls.slice(0, 6),
+      url: lanes[0] && lanes[0].url ? lanes[0].url : routeUrl(route, task.url),
+      urls: lanes,
       size: task.size || 0,
-      threads: threads
+      threads: task.segThreads
     });
     persist();
     return true;
@@ -1437,42 +1493,49 @@ async function startSegmented(task, route, settings, order) {
  * 以前换线 = abortSeg + 重新 startSegmented，已经下好的几 MB 全扔，
  * 所以只敢在下到 8% 之前换。现在只让 off.js 把「剩余区间」换到下一条线路，
  * chunks 一个不丢，下到 90% 发现被限速也救得回来。 */
+/* 换线选路：在所有候选里挑「实测最快」的那条，而不是按名单顺序轮下一个。
+ *
+ * 为什么不做轮换：轮换的隐含假设是「每条线都一样，轮流用人人都有份」。
+ * 实际镜像差别是 10 倍级的 —— 一条 2MB/s、一条 80KB/s，轮换等于每下几秒
+ * 就把快线让给慢线跑一阵，平均速度被生生拉低一半。
+ * 所以这里只有一个判据：segScore 最高的胜出。
+ *
+ * opt.beat：要求候选至少要比这个速度（B/s）快，否则宁可不折腾（原地重连更划算）。
+ * opt.force：无条件换（手动点「换线路」时用）。
+ */
 function pickSegNext(task, targetPrefix, opt) {
   var pool = (task && task.segPool) || [];
   if (!pool.length) return null;
-  var now = Date.now();
   if (targetPrefix !== undefined && targetPrefix !== null) {
     for (var i = 0; i < pool.length; i++) if (pool[i].prefix === targetPrefix) return pool[i];
   }
   if (pool.length < 2) return null;
-  var cur = -1;
-  for (var j = 0; j < pool.length; j++) if (pool[j].prefix === task.routePrefix) { cur = j; break; }
-  var cands = [];
-  for (var k = 1; k <= pool.length; k++) {
-    var c = pool[(cur + k + pool.length) % pool.length];
-    if (c.prefix === task.routePrefix) continue;
-    cands.push(c);
-  }
+
+  var curPrefix = task.routePrefix;
+  var cands = pool.filter(function (c) { return c.prefix !== curPrefix; })
+    .map(function (c) { return { r: c, s: segScore(task, c.prefix) }; });
   if (!cands.length) return null;
-  if (opt && opt.untriedOnly) {
-    var tried = task.segTried || [];
-    cands = cands.filter(function (c) { return tried.indexOf(c.prefix) < 0; });
-    if (!cands.length) return null;
-  }
-  if (opt && opt.minBps) {
-    // 只试「测速明显更快」的：没有就不折腾，免得在几条慢线之间来回跳
-    var pm = probeBps();
-    var better = cands.filter(function (c) { return (pm[c.prefix] || 0) >= opt.minBps; });
-    if (!better.length) return null;
-    cands = better;
-    cands.sort(function (a, b) { return (pm[b.prefix] || 0) - (pm[a.prefix] || 0); });
-    return cands[0];
-  }
-  // 优先没被临时降权的；都被降权了就按池子顺序轮（总比死守一条强）
-  var fresh = cands.filter(function (c) {
-    return (badUntil.get(c.prefix) || 0) < now && (slowUntil.get(c.prefix) || 0) < now;
+
+  /* 试过并且实测不如当前线路的，只在没有别的选择时才回头 */
+  var tried = task.segTried || [];
+  var curLive = (task.segLive && task.segLive[curPrefix === undefined ? '' : curPrefix]) || 0;
+  var fresh = cands.filter(function (x) {
+    if (tried.indexOf(x.r.prefix) < 0) return true;
+    var live = (task.segLive && task.segLive[x.r.prefix]) || 0;
+    return live > curLive;
   });
-  return fresh[0] || cands[0];
+  if (fresh.length) cands = fresh;
+
+  cands.sort(function (a, b) { return b.s - a.s; });
+  var best = cands[0];
+  if (opt && opt.force) return best.r;
+  if (opt && opt.beat) {
+    /* 要求「明显更快」才换：没测速数据也算没把握，宁可原地重连 */
+    if (!best.s || best.s < opt.beat) return null;
+  }
+  /* 全部线路都还没测过（都是 0）时，best 就是线路池里的第一条，
+   * 至少比死守一条疑似被限速的线路强。 */
+  return best.r;
 }
 
 function rotateSeg(task, targetPrefix, opt) {
@@ -1480,16 +1543,27 @@ function rotateSeg(task, targetPrefix, opt) {
   var prevPrefix = task.routePrefix;
   var next = pickSegNext(task, targetPrefix, opt);
   if (!next) return false;
-  // 换线前记下这条线路跑出来的峰值：全部试过之后要能挑回最快的那条
-  var prevBps = task.bestSpeed || task.speed || 0;
-  if (prevPrefix !== undefined && prevBps > ((task.segBest && task.segBest.bps) || 0)) {
-    task.segBest = { prefix: prevPrefix, bps: prevBps };
+  /* 把这条线路的实测值写回泳道表，下次比较才有依据 */
+  var prevLive = (task.segLive && task.segLive[prevPrefix === undefined ? '' : prevPrefix]) || 0;
+  if (prevPrefix !== undefined && prevLive > 0) {
+    task.segLive = task.segLive || {};
+    task.segLive[prevPrefix === null ? '' : prevPrefix] = prevLive;
   }
   if (prevPrefix !== undefined) {
     task.segTried = task.segTried || [];
     if (task.segTried.indexOf(prevPrefix) < 0) task.segTried.push(prevPrefix);
   }
-  segSend({ type: 'seg-rotate', id: task.id, toUrl: next.url });
+  /* 换的是「接下来去哪些线路要数据」，不是把已下内容重来：
+   * 用 seg-rebuild 重排泳道（快的排前面），off.js 里的 chunks 原样保留。
+   * 也没有整池轮换这回事 —— 只是把最快的几条线重新排一遍序。 */
+  var lanes = laneSetFor(task, next, LANE_POOL_MAX);
+  segSend({
+    type: 'seg-rebuild',
+    id: task.id,
+    urls: lanes,
+    threads: task.segThreads || LANE_CONC_DEFAULT
+  });
+  task.segActive = lanes.map(function (x) { return x.prefix; });
   task.routePrefix = next.prefix;
   task.route = next.name + (next.prefix ? '' : '（直连）');
   task.routeRotations = (task.routeRotations || 0) + 1;
@@ -1503,8 +1577,14 @@ function rotateSeg(task, targetPrefix, opt) {
 }
 
 function segSend(payload) {
-  callExt(EXT.runtime.sendMessage, EXT.runtime,
-    [Object.assign({ target: 'offscreen' }, payload)]);
+  var m = Object.assign({ target: 'offscreen' }, payload);
+  /* Firefox 没有 offscreen 文档，off.js 就加载在本页面里；
+   * 同页面自收不到 sendMessage，所以直接调用它的入口。 */
+  if (SEG_INLINE && typeof globalThis.__segDispatch === 'function') {
+    try { globalThis.__segDispatch(m); } catch (e) {}
+    return;
+  }
+  callExt(EXT.runtime.sendMessage, EXT.runtime, [m]);
 }
 
 function abortSeg(task) {
@@ -1525,6 +1605,26 @@ function onSegProgress(m) {
   }
   task.received = m.received || 0;
   if (m.total) { task.total = m.total; if (!task.size) task.size = m.total; }
+  /* 多线路并发的实时状态：界面要能看出「现在是 4 条线一起跑」，
+   * 而不是像以前那样只能看到一个线路名、以为另外几条没在干活。 */
+  if (m.lanes && m.lanes.length) {
+    var live = m.lanes.filter(function (x) { return !x.dead; });
+    task.segLanes = live.length;
+    task.segLaneInfo = live.map(function (x) {
+      return { name: x.n, bps: x.bps || 0, on: x.on || 0 };
+    });
+    /* 记每条线路的真实速度：换线时按这个排序选最快的，不再按名单轮换。
+     * 记「峰值」但不迷信峰值 —— 掉到峰值的 40% 以下就把旧峰值作废
+     * （镜像经常是首包爆发几 MB/s、随后被限到几十 KB/s，那种峰值不能当依据）。 */
+    task.segLive = task.segLive || {};
+    m.lanes.forEach(function (x) {
+      if (typeof x.p !== 'string') return;
+      var v = x.bps || 0;
+      if (!v) return;
+      var pv = task.segLive[x.p] || 0;
+      if (v > pv || v < pv * 0.4) task.segLive[x.p] = v;
+    });
+  }
   if (typeof m.speed === 'number' && m.speed > 0) {
     task.speed = m.speed;
     if (!task.bestSpeed || m.speed > task.bestSpeed) task.bestSpeed = m.speed;
@@ -1757,7 +1857,7 @@ async function startTask(task, settings) {
       if (task.status !== 'probing') { updateBadge(); pump(); return; }
     }
     var size0 = task.size || task.total || 0;
-    var segCap0 = (settings.segMaxMB || 128) * 1024 * 1024;
+    var segCap0 = (settings.segMaxMB || 512) * 1024 * 1024;
     var willSeg = settings.segEnabled !== false && !task.segFailed &&
       size0 > 1024 * 1024 && size0 <= segCap0;
     // 分片下载自带失败回退（发不出 Range 会自动改单连接），不必再单独探一字节；
@@ -1948,7 +2048,7 @@ try {
 
 /* ---------------- 消息路由 ---------------- */
 
-onMessage(function (msg, sender, respond) {
+function bgDispatch(msg, sender, respond) {
   if (msg && msg.target === 'offscreen') return false;   // 发给隐藏文档的，后台不处理
   (async function () {
     try {
@@ -2058,6 +2158,8 @@ onMessage(function (msg, sender, respond) {
                 speed: t.speed || 0, slow: !!t.slow, segmented: !!t.segmented,
                 boosting: !!t.boosting, boostCount: t.boostCount || 0,
                 routeRotations: t.routeRotations || 0,
+                segLanes: t.segLanes || 0,
+                segLaneInfo: t.segLaneInfo || null,
                 paused: t.status === 'paused',
                 routePrefix: t.routePrefix || ''
               };
@@ -2156,7 +2258,11 @@ onMessage(function (msg, sender, respond) {
     }
   })();
   return true;
-});
+}
+
+onMessage(bgDispatch);
+/* Firefox：分片器就在同一个后台页面里，它发消息给自己收不到，直接走这个入口 */
+try { globalThis.__bgDispatch = bgDispatch; } catch (e) {}
 
 /* ---------------- 右键菜单 ---------------- */
 

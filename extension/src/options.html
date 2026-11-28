@@ -78,19 +78,19 @@
       <input type="checkbox" id="segEnabled">
       <span>
         <b>多线程分片下载</b>
-        <i>把一个文件切成几段同时下，比浏览器单连接快得多；完成后自动拼回一个文件。慢下来会自动重连，某片卡死会换线路</i>
+        <i>把一个文件切成很多段，同时向多条镜像线路并发要数据 —— 单条线路限速时靠多线路叠加带宽。哪条线慢就把它的分片挪到快线上，已下字节不丢；完成后自动拼回一个文件</i>
       </span>
     </label>
 
     <label class="line">
-      <span class="lab">分几片</span>
+      <span class="lab">每条线路并发</span>
       <select id="threads">
-        <option value="2">2 片</option>
-        <option value="3">3 片</option>
-        <option value="4">4 片（推荐）</option>
-        <option value="6">6 片</option>
+        <option value="2">2 个连接</option>
+        <option value="3">3 个连接</option>
+        <option value="4">4 个连接（推荐）</option>
+        <option value="6">6 个连接</option>
       </select>
-      <i>都在当前最快的那条线路上并发；实测 2~4 片最划算，镜像按 IP 限速，片数太多反而互相挤</i>
+      <i>每条线路最多开几个连接。浏览器对同一域名上限是 6 条，默认 4 条 × 最多 5 条线路 ≈ 20 路并行；镜像按 IP 限速时多线路才是真提速</i>
     </label>
 
     <label class="line">
@@ -98,10 +98,12 @@
       <select id="segMaxMB">
         <option value="32">32 MB</option>
         <option value="64">64 MB</option>
-        <option value="128">128 MB（推荐）</option>
+        <option value="128">128 MB</option>
         <option value="256">256 MB</option>
+        <option value="512">512 MB（推荐）</option>
+        <option value="1024">1 GB</option>
       </select>
-      <i>超过这个大小改走浏览器单连接：分片要在内存里拼装，太大容易占满内存</i>
+      <i>超过这个大小改走浏览器单连接（单连接通常只有几十 KB/s）。分片要在内存里拼装，512 MB 以内基本没问题</i>
     </label>
 
     <label class="line">

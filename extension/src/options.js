@@ -51,7 +51,7 @@
     $('notify').checked = !!s.notify;
     $('segEnabled').checked = s.segEnabled !== false;
     $('threads').value = String(s.threads || 4);
-    $('segMaxMB').value = String(s.segMaxMB || 128);
+    $('segMaxMB').value = String(s.segMaxMB || 512);
     $('lowSpeedKB').value = String(s.lowSpeedKB || 40);
     $('token').value = s.token || '';
     $('extraRoutes').value = routesToText(s.extraRoutes);
@@ -91,7 +91,7 @@
       notify: $('notify').checked,
       segEnabled: $('segEnabled').checked,
       threads: parseInt($('threads').value, 10) || 4,
-      segMaxMB: parseInt($('segMaxMB').value, 10) || 128,
+      segMaxMB: parseInt($('segMaxMB').value, 10) || 512,
       lowSpeedKB: parseInt($('lowSpeedKB').value, 10) || 40,
       token: $('token').value.trim(),
       extraRoutes: extra
