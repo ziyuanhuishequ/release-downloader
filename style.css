@@ -188,7 +188,7 @@ h1{
   box-shadow:5px 5px 0 rgba(26,30,48,.16);
 }
 .f1{top:-54px;left:-6px;transform:rotate(-2.4deg);animation:bob 5.6s ease-in-out infinite}
-.f2{bottom:-26px;right:-24px;transform:rotate(2deg);animation:bob 6.8s ease-in-out infinite reverse}
+.f2{bottom:-30px;left:-26px;transform:rotate(2deg);animation:bob 6.8s ease-in-out infinite reverse}
 @keyframes bob{50%{translate:0 -8px}}
 
 /* ---------- 数据条 ---------- */
