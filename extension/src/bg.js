@@ -96,14 +96,16 @@ function apiHint(code) {
 }
 
 async function ghFetch(path, settings) {
-  var headers = { 'Accept': 'application/vnd.github+json' };
-  if (settings && settings.token) headers['Authorization'] = 'Bearer ' + settings.token;
+  var token = settings && settings.token;
   var list = apiOrder();
   var errs = [];
   var left = list.length;
   var done = false;
 
-  function fetchWithTimeout(url) {
+  function fetchWithTimeout(url, isDirect) {
+    // Token 只能带给直连的 api.github.com，镜像是第三方反代，带上会泄露 Token
+    var headers = { 'Accept': 'application/vnd.github+json' };
+    if (isDirect && token) headers['Authorization'] = 'Bearer ' + token;
     var c = new AbortController();
     var t = setTimeout(function () { try { c.abort(); } catch (e) {} }, 11000);
     return fetch(url, { headers: headers, cache: 'no-store', signal: c.signal })
@@ -127,7 +129,7 @@ async function ghFetch(path, settings) {
       // 直连先发，镜像按阶梯延后：直连正常时不会产生多余的镜像请求
       setTimeout(function () {
         if (done) return;
-        fetchWithTimeout(ch.base + path).then(function (res) {
+        fetchWithTimeout(ch.base + path, ch.base === API_BASE).then(function (res) {
           if (done) return;
           if (res.ok) {
             return res.json().then(function (data) {
