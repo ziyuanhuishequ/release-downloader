@@ -37,7 +37,18 @@
 
 **装扩展**：解压到固定目录（别放临时目录，删了扩展就失效）→ `chrome://extensions`
 （Edge 是 `edge://extensions`）→ 右上角开启「开发者模式」→「加载已解压的扩展程序」→ 选解压出来的文件夹。
-扩展是「加载已解压」安装，**不会自动更新**：换新版后覆盖解压，再到扩展页点「重新加载」。
+扩展是「加载已解压」安装，Chrome 不允许直接装 zip，**也不会自动更新**。
+不想每次都手动解压的话，用仓库里的更新脚本（自动下载最新包并覆盖，设置和历史都保留）：
+
+```bash
+python tools/update_ext.py                 # 第一次会让你指一下扩展目录，之后记住
+python tools/update_ext.py --check         # 只看有没有新版
+python tools/update_ext.py --firefox       # 装的是 Firefox 版
+```
+
+跑完到 `chrome://extensions` 点一下扩展卡片上的刷新按钮（↻）即可。
+想彻底免维护只能上架应用商店（国内访问不了 Chrome 店，所以离线包仍是主力），
+上架资料见 [`store/上架说明.md`](store/上架说明.md)。
 
 **装 macOS 版**：解压 zip 得到 `GitHubReleaseDownloader.app`，拖进「应用程序」文件夹即可，不用装任何运行时
 （包内是 arm64 + x86_64 的通用二进制，Intel 与 Apple 芯片都能跑）。
@@ -392,10 +403,15 @@ release-organizer.exe --dl http://127.0.0.1:18786/big.bin <大小> <输出目录
 
 ## 说明
 
-- 仅支持 Windows，目录选择对话框、打开文件夹、图标资源都依赖 Win32 API
+- Windows 是主力：目录选择对话框、打开文件夹、图标资源走 Win32 API；macOS 由 GitHub Actions 在真 Mac 上编译通用二进制（`.github/workflows/macos.yml`），没有 Mac 也能出包
 - 字体依赖系统已安装的 MiSans，未安装时观感会变，功能不受影响
 - 下载开始时界面右下角会显示一个约 8 秒自动关闭的推广卡片。不需要的话，注释掉 `main.rs` 里 `draw_promo` 的调用即可
 - 界面上的浮层卡片（推广卡、悬停说明、完成提醒）是手绘控件，不支持键盘 Tab 聚焦
+
+## 隐私
+
+不收集、不上传任何数据，不需要账号，没有统计/广告 SDK。完整说明见
+[隐私政策](https://ziyuanhuishequ.github.io/release-downloader/privacy.html)。
 
 ## 许可证
 
